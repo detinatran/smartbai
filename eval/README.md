@@ -1,7 +1,11 @@
 # Decision benchmark
 
 The benchmark follows [`EVAL_PROTOCOL.md`](EVAL_PROTOCOL.md), which was fixed before the oracle or any agent was run,
-plus amendment 1.
+plus amendments 1 and 2. The method protocol, twin-certified selective decisions on an imperfect twin, is
+[`CERTIFY_PROTOCOL.md`](CERTIFY_PROTOCOL.md).
+
+**Known issue (amendment 2).** `run_whatif` still runs on an exact copy of the simulator, including its hidden state.
+Do not run conditions a or b until the observable-only twin is in place.
 
 There are 30 cases in 5 families: degradation, breakdown, quality drift, heat wave and rush order. Each case is a twin
 state with one hidden injected event. An agent investigates through the tool server, takes actions, and submits a

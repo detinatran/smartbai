@@ -87,3 +87,15 @@ only to test the code, and its values are not reused. It exposed two design faul
 Scenarios are regenerated with these fixes. Everything else in this protocol is unchanged, including the rush target
 rule. A known limitation of that rule: the target (1.04 x the no-action expectation) can exceed what arrivals allow in
 12 h, so in rush cases every policy may pay some shortfall. Those cases measure how close an agent gets.
+
+## Amendment 2 (2026-11-20, after the oracle and the rule/no-action runs, before any run of condition a or b)
+`run_whatif` ran on an exact copy of the simulator. The copy included the hidden state: which station is degraded, the
+injected defect multiplier, and the coming heat wave. Its replication streams also coincided with the oracle's. An agent
+in condition (a) asking for a 12 h, 8-replication what-if of a candidate would therefore receive that candidate's
+oracle value exactly. Condition (a) would compare an agent with perfect foresight against (b), not a realistic twin.
+
+Fix: in conditions (a) and (b), `run_whatif` runs on a twin synchronised from observables only. The twin
+synchronisation and hidden-state sampling are those of [`CERTIFY_PROTOCOL.md`](CERTIFY_PROTOCOL.md) (section "Plant and
+twin"), with the plant parameters equal to `ASSUMED`. The what-if replication streams are disjoint from the oracle's.
+
+The oracle, the rule results and the no-action results do not use `run_whatif` and are unchanged.
