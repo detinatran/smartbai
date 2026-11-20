@@ -4,7 +4,7 @@
 
 "Cognitive" ở đây có nghĩa cụ thể như sau. Twin không chỉ hiển thị dữ liệu. Một LLM agent **đọc trạng thái twin, chạy mô phỏng what-if trong twin để kiểm chứng, rồi mới đề xuất hành động**. Mọi khẳng định của agent phải dựa trên quan sát từ twin.
 
-> Trạng thái: Isaac Sim chạy headless. **Twin v2** dựng theo cấu trúc dây chuyền Bosch (`twin/build_bosch_line.py`); scene đóng chai v1 giữ làm demo. Bộ mô phỏng sự kiện, server tool và adapter LLM chưa làm.
+> Trạng thái: Isaac Sim chạy headless. **Twin v2** dựng theo cấu trúc dây chuyền Bosch (`twin/build_bosch_line.py`); scene đóng chai v1 giữ làm demo. **Bộ mô phỏng sự kiện và server tool đã có** ([`sim/`](sim)); adapter LLM đang làm.
 
 ![Twin v2: topology Bosch, màu máy = tỷ lệ lỗi thật](docs/img/twin_v2_overview.jpg)
 
@@ -64,6 +64,7 @@ Không có dữ liệu cấp máy của nhà máy Dubai nào công khai. Dữ li
 | [`twin/build_bosch_line.py`](twin/build_bosch_line.py) | twin v2: dựng scene từ cấu hình Bosch (nhánh vào song song, băng chuyền gom, trục Line 3), màu máy theo tỷ lệ lỗi, số đầu cảm biến theo số cảm biến thật |
 | [`data_tools/bosch_line_structure.py`](data_tools/bosch_line_structure.py) | rút cấu trúc dây chuyền từ dữ liệu Bosch (trạm, luồng nối, tuyến, tỷ lệ lỗi); chỉ xuất bảng tổng hợp |
 | [`data_tools/make_bosch_twin_config.py`](data_tools/make_bosch_twin_config.py) | sinh cấu hình twin v2 (trạm, nhóm song song, luồng nối) từ các bảng tổng hợp |
+| [`sim/`](sim) | bộ mô phỏng sự kiện rời rạc trên topology Bosch + khí hậu Dubai (đã kiểm chứng với số liệu Bosch), what-if nhiều lần lặp, server tool HTTP cho agent |
 | [`data_tools/fetch_bayanat.py`](data_tools/fetch_bayanat.py) | tải 24 bộ thống kê công nghiệp/sản xuất UAE từ bayanat.ae (bản đầy đủ qua API của cổng) |
 | [`modules/qc_visa/`](modules/qc_visa) | baseline phát hiện lỗi sản phẩm trên VisA (PatchCore, ResNet-50), protocol chốt trước; chưa chạy |
 

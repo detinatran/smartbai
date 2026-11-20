@@ -11,19 +11,20 @@ Tài liệu này dành cho người viết adapter LLM. Mục tiêu là dùng l�
 - **Trace:** lưu từng lượt (prompt, output thô, lệnh đã parse, kết quả tool), ghim model revision / seed / hash prompt, xuất một thư mục hoặc ZIP mỗi lần chạy.
 - **Chấm điểm:** F (định dạng), khớp hành động, C (ngữ nghĩa), R (lý do), và **cờ bằng chứng** (mục 3).
 
-## 2. Tool phía twin (dự kiến)
+## 2. Tool phía twin (đã chạy được: [`sim/tool_server.py`](../sim/tool_server.py), `GET /tools` trả danh sách và tham số)
 
 Mọi tool trả về JSON có `observation_id` (chuỗi duy nhất) và `t_sim` (thời điểm mô phỏng).
 
 | Tool | Tham số | Trả về |
 |---|---|---|
-| `get_line_state` | không có | trạng thái từng trạm (chạy/dừng/lỗi), hàng chờ, sản lượng ca hiện tại |
-| `get_station` | `station_id` | nhiệt độ, độ rung, dòng điện, tốc độ, lỗi gần nhất |
-| `get_sensor_history` | `station_id, signal, hours` | chuỗi thời gian của một tín hiệu |
-| `predict_failure` | `station_id, horizon_h` | xác suất hỏng trong khoảng, RUL ước lượng |
-| `run_whatif` | `scenario` (dict: hành động, tốc độ, ca, nhiệt độ môi trường…), `hours` | KPI sau mô phỏng: sản lượng, OEE, điện năng, chi phí; twin thật không bị đổi |
-| `schedule_maintenance` | `station_id, start_time` | xác nhận, thay đổi kế hoạch trong twin |
-| `set_speed` | `station_id, pct` | xác nhận |
+| `get_line_state` | không có | trạng thái mọi trạm, nhiệt độ ngoài trời và trong xưởng, KPI từ đầu phiên |
+| `get_station` | `station_id` | trạng thái (up/down/maint), tốc độ, hàng chờ, nhiệt độ động cơ, độ rung, số lần hỏng |
+| `get_sensor_history` | `station_id, signal (motor_temp/vibration/queue/status), hours ≤ 48` | chuỗi thời gian 10 phút/điểm |
+| `predict_failure` | `station_id, horizon_h` | xác suất hỏng trong khoảng và bằng chứng cảm biến (baseline, AUC 0.785) |
+| `run_whatif` | `actions` (danh sách hành động như các tool dưới, thêm `set_hall_coupling`), `hours ≤ 48`, `reps ≤ 10` | trung bình ± độ lệch KPI: sản lượng, tỷ lệ lỗi, OEE, số lần hỏng, điện, chi phí; twin thật không đổi |
+| `schedule_maintenance` | `station_id, in_minutes` | dừng bảo trì 30 phút sau `in_minutes` |
+| `set_speed` | `station_id, pct (30–150)` | xác nhận; chạy nhanh làm máy mòn nhanh hơn |
+| `set_dispatch` | `weights` (vd. `{S35: 0.5, S36: 1.5}`) | chia tải giữa các trạm song song |
 | `submit_decision` | `report` (JSON: hành động, lý do, các con số kèm `observation_id`) | kết thúc case |
 
 ## 3. Quy tắc bằng chứng (chỉ số chính)
