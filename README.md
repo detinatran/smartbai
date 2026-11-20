@@ -4,9 +4,11 @@
 
 "Cognitive" ở đây có nghĩa cụ thể như sau. Twin không chỉ hiển thị dữ liệu. Một LLM agent **đọc trạng thái twin, chạy mô phỏng what-if trong twin để kiểm chứng, rồi mới đề xuất hành động**. Mọi khẳng định của agent phải dựa trên quan sát từ twin.
 
-> Trạng thái: Isaac Sim chạy headless; **scene dây chuyền v1 đã dựng** (`twin/build_line.py`). Bộ mô phỏng sự kiện, server tool và adapter LLM chưa làm.
+> Trạng thái: Isaac Sim chạy headless. **Twin v2** dựng theo cấu trúc dây chuyền Bosch (`twin/build_bosch_line.py`); scene đóng chai v1 giữ làm demo. Bộ mô phỏng sự kiện, server tool và adapter LLM chưa làm.
 
-![Dây chuyền đóng chai smartbai v1](docs/img/line_v1_end_of_line.jpg)
+![Twin v2: topology Bosch, màu máy = tỷ lệ lỗi thật](docs/img/twin_v2_overview.jpg)
+
+**Twin v2.** Topology và tham số của 39 trạm (4 line) lấy từ bộ Bosch Production Line Performance: thứ tự trạm theo dấu thời gian của 1.18 triệu sản phẩm, trạm song song, tỷ lệ sản phẩm qua từng trạm, tỷ lệ lỗi, số cảm biến. Màu máy: xanh < 1.1×, vàng 1.1–1.5×, cam 1.5–3×, đỏ > 3× tỷ lệ lỗi trung bình (trạm đỏ S32 có tỷ lệ lỗi gấp khoảng 8 lần). Dữ liệu Bosch thuộc luật cuộc thi Kaggle nên **không** có trong repo; muốn tái lập phải tự tải từ Kaggle rồi chạy `data_tools/bosch_line_structure.py` → `data_tools/make_bosch_twin_config.py` → `twin/build_bosch_line.py`.
 
 ## Kiến trúc
 
@@ -59,6 +61,9 @@ Không có dữ liệu cấp máy của nhà máy Dubai nào công khai. Dữ li
 | [`twin/isaac_smoke.py`](twin/isaac_smoke.py) | test headless Isaac Sim: vật lý + render Replicator |
 | [`twin/line_config.py`](twin/line_config.py) | định nghĩa dây chuyền: 7 trạm (ID, loại, công suất, cảm biến), dùng chung cho scene, mô phỏng và server tool |
 | [`twin/build_line.py`](twin/build_line.py) | dựng scene trong nhà kho NVIDIA: băng chuyền con lăn, máy chiết/đóng nắp/dán nhãn, camera QC, robot UR10/UR5e, pallet; lưu USD và render 5 góc (`docs/img/`) |
+| [`twin/build_bosch_line.py`](twin/build_bosch_line.py) | twin v2: dựng scene từ cấu hình Bosch (nhánh vào song song, băng chuyền gom, trục Line 3), màu máy theo tỷ lệ lỗi, số đầu cảm biến theo số cảm biến thật |
+| [`data_tools/bosch_line_structure.py`](data_tools/bosch_line_structure.py) | rút cấu trúc dây chuyền từ dữ liệu Bosch (trạm, luồng nối, tuyến, tỷ lệ lỗi); chỉ xuất bảng tổng hợp |
+| [`data_tools/make_bosch_twin_config.py`](data_tools/make_bosch_twin_config.py) | sinh cấu hình twin v2 (trạm, nhóm song song, luồng nối) từ các bảng tổng hợp |
 | [`data_tools/fetch_bayanat.py`](data_tools/fetch_bayanat.py) | tải 24 bộ thống kê công nghiệp/sản xuất UAE từ bayanat.ae (bản đầy đủ qua API của cổng) |
 | [`modules/qc_visa/`](modules/qc_visa) | baseline phát hiện lỗi sản phẩm trên VisA (PatchCore, ResNet-50), protocol chốt trước; chưa chạy |
 

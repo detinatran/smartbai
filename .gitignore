@@ -9,3 +9,6 @@ spot-diff/
 results/
 *.tar
 *.zip
+bosch/
+*twin_v2_config.json
+structure/
