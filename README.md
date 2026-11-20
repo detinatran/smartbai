@@ -1,83 +1,185 @@
-# smartbai: Cognitive Twin cho nhà máy SME ở Dubai
+# smartbai: a cognitive digital twin for an SME production line in Dubai
 
-**smartbai** ("smart factory in Dubai") xây một *cognitive digital twin* cho một dây chuyền sản xuất SME, theo hướng của dự án RDI của Dubai Future Foundation [*Cognitive Twins: Leveraging Artificial Intelligence and Omniverse-Powered Digital Twins for Transforming Dubai's Manufacturing Sector*](https://rdi.dubaifuture.ae/?p=356).
+**smartbai** ("smart factory in Dubai") builds a *cognitive digital twin* of a manufacturing line. It follows the direction
+of the Dubai Future Foundation RDI project
+[*Cognitive Twins: Leveraging Artificial Intelligence and Omniverse-Powered Digital Twins for Transforming Dubai's Manufacturing Sector*](https://rdi.dubaifuture.ae/?p=356).
 
-"Cognitive" ở đây có nghĩa cụ thể như sau. Twin không chỉ hiển thị dữ liệu. Một LLM agent **đọc trạng thái twin, chạy mô phỏng what-if trong twin để kiểm chứng, rồi mới đề xuất hành động**. Mọi khẳng định của agent phải dựa trên quan sát từ twin.
+Here "cognitive" has a concrete meaning. The twin does more than display data: an LLM agent **reads the twin's state,
+tests candidate actions with what-if simulations inside the twin, and only then recommends an action**. Every claim the
+agent makes must cite an observation produced by the twin.
 
-> Trạng thái: Isaac Sim chạy headless. **Twin v2** dựng theo cấu trúc dây chuyền Bosch (`twin/build_bosch_line.py`); scene đóng chai v1 giữ làm demo. **Bộ mô phỏng sự kiện và server tool đã có** ([`sim/`](sim)); adapter LLM đang làm.
+**Status.**
 
-![Twin v2: topology Bosch, màu máy = tỷ lệ lỗi thật](docs/img/twin_v2_overview.jpg)
+| Component | State |
+|---|---|
+| Isaac Sim 6.2 (headless) | done |
+| Twin v2, built from the Bosch line structure | done |
+| Bottling-line demo scene v1 | done |
+| Discrete-event simulator and HTTP tool server | done (validated against the Bosch data) |
+| LLM adapter | in progress |
+| Evaluation scenarios | to do |
 
-**Twin v2.** Topology và tham số của 39 trạm (4 line) lấy từ bộ Bosch Production Line Performance: thứ tự trạm theo dấu thời gian của 1.18 triệu sản phẩm, trạm song song, tỷ lệ sản phẩm qua từng trạm, tỷ lệ lỗi, số cảm biến. Màu máy: xanh < 1.1×, vàng 1.1–1.5×, cam 1.5–3×, đỏ > 3× tỷ lệ lỗi trung bình (trạm đỏ S32 có tỷ lệ lỗi gấp khoảng 8 lần). Dữ liệu Bosch thuộc luật cuộc thi Kaggle nên **không** có trong repo; muốn tái lập phải tự tải từ Kaggle rồi chạy `data_tools/bosch_line_structure.py` → `data_tools/make_bosch_twin_config.py` → `twin/build_bosch_line.py`.
+![Twin v2: Bosch-derived topology; machine colour encodes the real failure rate](docs/img/twin_v2_overview.jpg)
 
-## Kiến trúc
+## Twin v2: a line rebuilt from real production data
+
+The topology and parameters of 39 stations on 4 lines come from the
+[Bosch Production Line Performance](https://www.kaggle.com/competitions/bosch-production-line-performance) data:
+- the station order, recovered from the timestamps of 1.18 million parts;
+- which stations run in parallel;
+- the share of parts visiting each station;
+- the failure rate of the parts visiting each station;
+- the number of sensors per station.
 
 ```
- Bối cảnh Dubai (khí hậu, giá điện, ca làm SME)       Cảm biến & máy của dây chuyền
+ Line 0, branch A (57% of parts): S0 → S1 → (S2|S3) → (S4|S5) → (S6|S7) → S8 → (S9|S10|S11) ─┐
+ Line 0, branch B (20%):          S12 → S13 → (S14|S15) → (S16|S17) → (S18|S19) → S20 → (S21|S22|S23) ─┼─► collector
+ Line 1 → Line 2 (19%):           (S24|S25) → (S26|S27|S28) ─┘
+ Line 3 trunk (~95% of parts):    S29 → S30 → (S31|S32) → S33 → S34 → (S35|S36) → S37 → S38
+```
+
+**How to read the scene:**
+- **Machine colour** is the failure rate relative to the line average: teal below 1.1×, yellow 1.1–1.5×, orange 1.5–3×, red above 3×. The red station, **S32**, fails about 8× more often than average (4.5% against 0.58%).
+- **Sensor pucks on a machine head** show the station's real sensor count, capped at 12.
+- **Parts on each belt** are proportional to the station's flow.
+- **Every station prim carries its metadata** (line, parallel group, failure rate, parts, sensors) in the USD file, for the tool server to read.
+
+| Trunk with the S32 hot spot (red) | Parallel stations S35 \| S36 |
+|---|---|
+| ![S32 hot spot](docs/img/twin_v2_trunk_hotspot.jpg) | ![S35 and S36](docs/img/twin_v2_parallel_s35_s36.jpg) |
+
+The Bosch data are subject to the Kaggle competition rules. Neither the data nor the configuration derived from them are
+in this repository. To rebuild twin v2, download the data from Kaggle yourself, then run:
+
+```bash
+python data_tools/bosch_line_structure.py BOSCH_DIR structure/       # aggregate tables: stations, transitions, routes
+python data_tools/make_bosch_twin_config.py structure/ twin_v2_config.json
+python twin/build_bosch_line.py twin_v2_config.json out/twin_v2       # Isaac Sim: USD + renders (about 30 s on an RTX 4090)
+```
+
+## Bottling-line demo scene (v1)
+
+A small beverage-bottling line in an NVIDIA warehouse:
+- **Stations:** depalletising robot (UR10), filler, capper, labeller, vision QC with reject bin, case-packing robot (UR5e), palletising robot (UR10).
+- **Bottles** change state as they pass the stations: empty, filled, capped, labelled.
+- **QC camera:** a top-down camera at the QC station renders images usable for visual inspection.
+
+| End of line | Overview |
+|---|---|
+| ![End of line](docs/img/line_v1_end_of_line.jpg) | ![Overview](docs/img/line_v1_overview.jpg) |
+| **Side view** | **QC camera (top-down)** |
+| ![Side view](docs/img/line_v1_side.jpg) | ![QC camera](docs/img/line_v1_qc_camera.jpg) |
+
+## Simulator and tool server
+
+[`sim/line_sim.py`](sim/line_sim.py) is a discrete-event simulator on the twin v2 topology:
+- **Routing:** parts follow a Markov chain fitted to the Bosch transition counts.
+- **Climate:** hall temperature follows the hourly outdoor temperature in Dubai.
+- **Breakdowns:** the failure rate rises with temperature, and every breakdown is preceded by a degradation window in which motor temperature and vibration drift and defects increase.
+- **Actions:** speed, preventive maintenance, load split between parallel stations, and cooling.
+- **What-if:** `whatif()` runs replicated copies with common random numbers and leaves the twin itself unchanged.
+
+[`sim/tool_server.py`](sim/tool_server.py) exposes the twin to an agent over HTTP:
+- the tools are `get_line_state`, `get_station`, `get_sensor_history`, `predict_failure`, `run_whatif`, `schedule_maintenance`, `set_speed`, `set_dispatch` and `submit_decision`;
+- every result carries an `observation_id`;
+- there is an observation log for evidence checking.
+
+Details are in [`sim/README.md`](sim/README.md); the agent interface is in [`docs/adapter_interface.md`](docs/adapter_interface.md).
+
+```bash
+python sim/tool_server.py twin_v2_config.json dubai_hourly_2015_2025.csv --port 8765
+curl -X POST localhost:8765/tool/run_whatif -d '{"actions": [{"action": "schedule_maintenance", "station_id": "S2"}], "hours": 12}'
+```
+
+**Validation against the Bosch data** (7 simulated days × 3 seeds, in July and in January):
+
+| | Simulator | Bosch |
+|---|---|---|
+| Correlation of per-station visit shares | 0.9999–1.0 (max abs. error 1.0–1.6 pp) | |
+| Correlation of per-station failure rates | 0.98–0.99 | |
+| Overall failure rate | 0.54–0.65% | 0.58% |
+| Failure rate at S32 | 4.4–6.3% | 4.51% |
+| Median stations per part | 13 | 13 |
+
+Some parameters are not in any public data: MTBF, repair times, temperature sensitivity, sensor models, power and costs.
+They are explicit assumptions in `ASSUMED`, reported with every run, until partner data replace them. With the current
+assumptions, July produces about 20% more breakdowns than January, and HVAC uses about 6,800 kWh/week in July against
+almost none in January.
+
+## Architecture
+
+```
+ Dubai context (climate, energy tariff, SME shifts)      Line sensors and machines
                  \                                       /
                   v                                     v
-          ┌──────── Omniverse Digital Twin (trạng thái, mô phỏng) ────────┐
-          │              ^ truy vấn what-if   | kết quả                     │
-          v              |                    v                            │
-       Tầng AI cognitive: Dự đoán → Suy luận (LLM agent) → Quyết định ─────┘
+          ┌──────── Omniverse digital twin (state, simulation) ────────┐
+          │              ^ what-if queries   | results                   │
+          v              |                   v                           │
+       Cognitive layer: prediction → reasoning (LLM agent) → decision ───┘
                                  |                     |
-                       Quản lý SME (hỏi đáp)    hành động trả về nhà máy
-                                 └── Đánh giá: kịch bản, chi phí, OEE
+                       SME manager (Q&A)        actions back to the line
+                                 └── evaluation: scenarios, cost, OEE
 ```
 
-| Tầng | Nội dung | Công cụ |
+| Layer | Content | Tools |
 |---|---|---|
-| 1. Twin vật lý/hình học | scene 3D: băng chuyền, các trạm, camera, cảm biến ảo | NVIDIA Isaac Sim 6.2 / Omniverse (OpenUSD) |
-| 2. Dữ liệu | luồng cảm biến và sự kiện gắn vào từng trạm | mô phỏng + dữ liệu công khai (xem dưới) |
-| 3. AI dự đoán | dự báo hỏng hóc, lỗi sản phẩm, OEE | PyTorch |
-| 4. Cognitive | LLM agent gọi tool của twin, chạy what-if, nộp quyết định có bằng chứng | adapter LLM (xem [`docs/adapter_interface.md`](docs/adapter_interface.md)) |
+| 1. Physical/geometric twin | 3D scene: conveyors, stations, cameras, virtual sensors | NVIDIA Isaac Sim 6.2 / Omniverse (OpenUSD) |
+| 2. Data | sensor and event streams per station | discrete-event simulator, public data (below) |
+| 3. Predictive AI | failure prediction, defects, OEE | PyTorch (`predict_failure` is a baseline for now, AUC 0.785) |
+| 4. Cognitive | LLM agent calling twin tools, running what-ifs, submitting evidence-backed decisions | LLM adapter ([`docs/adapter_interface.md`](docs/adapter_interface.md)) |
 
-## Câu hỏi nghiên cứu
+## Research question
 
-Agent được kiểm chứng bằng twin (có `run_whatif`, mọi con số phải trỏ tới một quan sát của twin) có ra quyết định tốt hơn và bịa ít hơn không? So với:
-- (a) agent chỉ đọc dữ liệu, không có what-if;
-- (b) luật cố định.
+Does an agent that is checked against the twin make better decisions and fabricate less? "Checked against the twin"
+means it can call `run_whatif`, and every number it reports must cite a twin observation. It is compared with:
+- (a) an agent that can only read data (no what-if);
+- (b) fixed rules.
 
-Đo trên một bộ kịch bản chốt trước: máy hỏng, đơn gấp, nắng nóng cực đoan, lỗi chất lượng. Chỉ số: độ đúng, chi phí/sản lượng sau quyết định, tỷ lệ khẳng định không có bằng chứng.
+The comparison runs on a scenario set fixed in advance: machine breakdown, rush order, extreme heat and a quality drift.
+The metrics are:
+- decision correctness;
+- cost and output after the decision;
+- the rate of claims without evidence.
 
-## Dữ liệu (một nhà máy thống nhất, không ghép rời rạc)
+## Data
 
-| Thành phần | Nguồn | Ghi chú |
+| Component | Source | Notes |
 |---|---|---|
-| Cấu trúc dây chuyền, lỗi sản phẩm | [Bosch Production Line Performance](https://www.kaggle.com/competitions/bosch-production-line-performance) (Kaggle) | cột theo line/station → layout scene; phải tự chấp nhận luật cuộc thi trên Kaggle |
-| Sức khoẻ máy mỗi trạm | mô phỏng trong twin, hiệu chỉnh theo kiểu [AI4I 2020](https://archive.ics.uci.edu/dataset/601/ai4i+2020+predictive+maintenance+dataset) (CC BY 4.0) | chưa làm |
-| Khí hậu Dubai | thời tiết lịch sử theo giờ | nhiệt độ môi trường → tải làm mát, mòn, điện năng |
-| Năng lượng / bối cảnh | [Dubai Pulse](https://www.dubaipulse.gov.ae) (DEWA consumption, DAFZA utilities), MoIAT open data | tham số giá điện, tiêu thụ |
-| Camera QC (tuỳ chọn) | [VisA](https://github.com/amazon-science/spot-diff) (CC BY 4.0) | baseline trong `modules/qc_visa` |
+| Line structure, routes, failure rates | [Bosch Production Line Performance](https://www.kaggle.com/competitions/bosch-production-line-performance) (Kaggle) | competition rules apply: accept them on Kaggle yourself; data not redistributed here |
+| Dubai climate | hourly weather 2015–2025 from the [Open-Meteo](https://open-meteo.com) archive (CC BY 4.0) | drives hall temperature, failure rates and HVAC energy |
+| UAE industry context | 24 industrial and manufacturing tables from [bayanat.ae](https://bayanat.ae) (UAE open data portal), fetched by `data_tools/fetch_bayanat.py` | licences, employment, value added, producer prices; context and cost parameters |
+| Visual inspection (optional) | [VisA](https://github.com/amazon-science/spot-diff) (CC BY 4.0) | baseline in `modules/qc_visa` |
 
-Không có dữ liệu cấp máy của nhà máy Dubai nào công khai. Dữ liệu thật của SME đối tác sẽ thay vào khi nhóm dự án cung cấp.
+No machine-level data from Dubai factories are public. The Dubai Pulse and data.dubai portals were not reachable from
+outside the UAE when we tried. Data from the project's partner SMEs will replace the assumed parameters when available.
 
-## Cấu trúc repo
+## Repository layout
 
-| Đường dẫn | Nội dung |
+| Path | Content |
 |---|---|
-| [`PLAN.md`](PLAN.md) | kế hoạch và các bước |
-| [`docs/adapter_interface.md`](docs/adapter_interface.md) | **giao diện giữa twin và adapter LLM** (danh sách tool, quy tắc bằng chứng, ràng buộc chạy) |
-| [`twin/isaac_smoke.py`](twin/isaac_smoke.py) | test headless Isaac Sim: vật lý + render Replicator |
-| [`twin/line_config.py`](twin/line_config.py) | định nghĩa dây chuyền: 7 trạm (ID, loại, công suất, cảm biến), dùng chung cho scene, mô phỏng và server tool |
-| [`twin/build_line.py`](twin/build_line.py) | dựng scene trong nhà kho NVIDIA: băng chuyền con lăn, máy chiết/đóng nắp/dán nhãn, camera QC, robot UR10/UR5e, pallet; lưu USD và render 5 góc (`docs/img/`) |
-| [`twin/build_bosch_line.py`](twin/build_bosch_line.py) | twin v2: dựng scene từ cấu hình Bosch (nhánh vào song song, băng chuyền gom, trục Line 3), màu máy theo tỷ lệ lỗi, số đầu cảm biến theo số cảm biến thật |
-| [`data_tools/bosch_line_structure.py`](data_tools/bosch_line_structure.py) | rút cấu trúc dây chuyền từ dữ liệu Bosch (trạm, luồng nối, tuyến, tỷ lệ lỗi); chỉ xuất bảng tổng hợp |
-| [`data_tools/make_bosch_twin_config.py`](data_tools/make_bosch_twin_config.py) | sinh cấu hình twin v2 (trạm, nhóm song song, luồng nối) từ các bảng tổng hợp |
-| [`sim/`](sim) | bộ mô phỏng sự kiện rời rạc trên topology Bosch + khí hậu Dubai (đã kiểm chứng với số liệu Bosch), what-if nhiều lần lặp, server tool HTTP cho agent |
-| [`data_tools/fetch_bayanat.py`](data_tools/fetch_bayanat.py) | tải 24 bộ thống kê công nghiệp/sản xuất UAE từ bayanat.ae (bản đầy đủ qua API của cổng) |
-| [`modules/qc_visa/`](modules/qc_visa) | baseline phát hiện lỗi sản phẩm trên VisA (PatchCore, ResNet-50), protocol chốt trước; chưa chạy |
+| [`PLAN.md`](PLAN.md) | plan and steps (Vietnamese) |
+| [`docs/adapter_interface.md`](docs/adapter_interface.md) | interface between the twin and the LLM adapter: tools, evidence rules, runtime limits (Vietnamese) |
+| [`sim/`](sim) | discrete-event simulator, validation, HTTP tool server |
+| [`twin/build_bosch_line.py`](twin/build_bosch_line.py) | twin v2 scene from the Bosch-derived configuration |
+| [`twin/build_line.py`](twin/build_line.py), [`twin/line_config.py`](twin/line_config.py) | bottling-line demo scene v1 and its station definitions |
+| [`twin/isaac_smoke.py`](twin/isaac_smoke.py) | Isaac Sim headless smoke test (physics + Replicator render) |
+| [`twin/probe_assets.py`](twin/probe_assets.py), [`twin/probe_walls.py`](twin/probe_walls.py) | helpers that list NVIDIA assets and warehouse wall positions |
+| [`data_tools/bosch_line_structure.py`](data_tools/bosch_line_structure.py) | derive stations, transitions and routes from the Bosch data (aggregates only) |
+| [`data_tools/make_bosch_twin_config.py`](data_tools/make_bosch_twin_config.py) | build the twin v2 configuration from those aggregates |
+| [`data_tools/fetch_bayanat.py`](data_tools/fetch_bayanat.py) | download UAE industry tables from bayanat.ae |
+| [`modules/qc_visa/`](modules/qc_visa) | visual-inspection baselines on VisA (PatchCore, ResNet-50) with a pre-registered protocol; not run yet |
 
-## Cài đặt Isaac Sim (Windows, đã kiểm tra)
+## Installing Isaac Sim (Windows, tested)
 
 ```bash
 python3.12 -m venv is && is\Scripts\activate
 pip install --upgrade pip
 pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cu128
 pip install "isaacsim[all,extscache]==6.2.0.0" --extra-index-url https://pypi.nvidia.com
-set OMNI_KIT_ACCEPT_EULA=YES      # chỉ đặt sau khi đã đọc và đồng ý NVIDIA Omniverse EULA
+set OMNI_KIT_ACCEPT_EULA=YES      # only after reading and accepting the NVIDIA Omniverse EULA
 python twin/isaac_smoke.py out/isaac_smoke
 ```
 
-- Cần driver NVIDIA ≥ 580.88 và khoảng 20 GB ổ trống. Trên Windows nên bật long path.
-- Kết quả đã kiểm tra trên RTX 4090: app khởi động sau khoảng 40 giây; khối hộp rơi và nằm yên ở z = 0.25; Replicator xuất ảnh RGB.
+- Requires an NVIDIA driver ≥ 580.88 and about 20 GB of disk; on Windows, enable long paths.
+- Tested on an RTX 4090: the app starts in about 40 s, a dropped box comes to rest at z = 0.25, and Replicator writes RGB images.
+- NVIDIA assets (conveyors, robots, warehouse) stream from NVIDIA's public asset server; nothing has to be downloaded by hand.
