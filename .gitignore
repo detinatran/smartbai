@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+is/
+data/
+cache/
+out/
+spot-diff/
+results/
+*.tar
+*.zip
