@@ -36,6 +36,10 @@ ASSUMED = dict(
     price_per_kwh=0.4,          # cost units
     defect_cost=25.0,           # cost units per defective part shipped to rework
     downtime_cost_per_h=300.0,  # cost units per station-hour of unplanned downtime
+    value_per_part=10.0,        # cost units of value per completed part (net value = value - cost - shortfall)
+    shortfall_cost_per_part=40.0,  # rush orders: penalty per part below the target
+    cooling_high_coupling=0.15,    # hall coupling when cooling is set to "high"
+    auto_reroute=False,         # False: parts follow the dispatch weights even to a stopped station (queue builds up)
     sensor_period_min=10.0,
 )
 
@@ -77,6 +81,7 @@ class LineSim:
         ent = {s: max(0.0, st[s]["parts"] - inn.get(s, 0)) for s in self.ids}
         z = sum(ent.values())
         self.entry = ([s for s in self.ids if ent[s] > 0], np.array([ent[s] / z for s in self.ids if ent[s] > 0]))
+        self.entry_p = {s: ent[s] / z for s in self.ids if ent[s] > 0}
         # stations
         lam = self.P["arrival_per_min"]
         mean_visits = sum(st[s]["share_parts"] for s in self.ids)
@@ -93,10 +98,12 @@ class LineSim:
                 p_defect=(base_defect + max(0.0, st[s]["fail_rate"] - avg)), speed=1.0, state="up", down_until=0.0,
                 queue=deque(), busy=False, busy_since=0.0, busy_time=0.0, down_time=0.0, maint_time=0.0,
                 haz=0.0, haz_E=self.rng.exponential(), degraded=False, failures=0, done=0, defects_made=0,
-                weight=1.0, sensors=defaultdict(list), util_window=0.0)
+                weight=1.0, sensors=defaultdict(list), util_window=0.0, drift=1.0)
         self.parts_in = 0
         self.completed = []  # (t_out, lead_time, defect, n_stations, path)
         self.log = []        # breakdowns, repairs, actions
+        self.heat = None     # (t_start, t_end, delta_c): injected heat wave
+        self.rush = None     # (t_start, t_end, target_parts): injected rush order
         self._last_sensor = 0.0
         self.push(self.rng.exponential(1 / lam), "arrive", None)
         self.push(0.0, "hour", None)
@@ -111,11 +118,15 @@ class LineSim:
         return self.t0 + pd.Timedelta(minutes=self.t if t is None else t)
 
     def outdoor_c(self, t=None):
+        t = self.t if t is None else t
         ts = self.clock(t).floor("h")
         try:
-            return float(self.climate.loc[ts])
+            v = float(self.climate.loc[ts])
         except KeyError:
-            return float(self.climate.iloc[(self.climate.index.get_indexer([ts], method="nearest"))[0]])
+            v = float(self.climate.iloc[(self.climate.index.get_indexer([ts], method="nearest"))[0]])
+        if self.heat and self.heat[0] <= t < self.heat[1]:
+            v += self.heat[2]
+        return v
 
     def hall_c(self, t=None):
         b = self.P["hall_base_c"]
@@ -128,7 +139,7 @@ class LineSim:
     # ------------------------------------------------------------------ part flow
     def enqueue(self, sid, part):
         S = self.S[sid]
-        if S["state"] != "up":  # route around a stopped machine to an idle-capable sibling
+        if S["state"] != "up" and self.P["auto_reroute"]:  # optional: route around a stopped machine
             alts = [g for g in S["group"] if g != sid and self.S[g]["state"] == "up"]
             if alts:
                 sid = min(alts, key=lambda g: len(self.S[g]["queue"]))
@@ -170,6 +181,11 @@ class LineSim:
     def _on_arrive(self, _):
         self.parts_in += 1
         sid = self.entry[0][self.rng.choice(len(self.entry[0]), p=self.entry[1])]
+        grp = [g for g in self.S[sid]["group"] if g in self.entry_p]
+        if len(grp) > 1:  # parallel entry stations follow the dispatch weights too
+            w = np.array([self.S[g]["weight"] * self.entry_p[g] for g in grp])
+            if w.sum() > 0:
+                sid = grp[self.rng.choice(len(grp), p=w / w.sum())]
         self.enqueue(sid, dict(id=self.parts_in, t_in=self.t, defect=False, n=0, path=[]))
         self.push(self.t + self.rng.exponential(1 / self.P["arrival_per_min"]), "arrive", None)
 
@@ -182,7 +198,7 @@ class LineSim:
         S["busy"] = False
         S["busy_time"] += self.t - S["busy_since"]
         S["done"] += 1
-        p = S["p_defect"] * (self.P["degraded_defect_mult"] if S["degraded"] else 1.0)
+        p = S["p_defect"] * S["drift"] * (self.P["degraded_defect_mult"] if S["degraded"] else 1.0)
         if self.rng.random() < p:
             part["defect"] = True
             S["defects_made"] += 1
@@ -222,7 +238,7 @@ class LineSim:
         if S["down_until"] > self.t + 1e-9:
             return
         S["down_time" if state == "down" else "maint_time"] += minutes
-        S["state"], S["haz"], S["haz_E"], S["degraded"] = "up", 0.0, self.rng.exponential(), False
+        S["state"], S["haz"], S["haz_E"], S["degraded"], S["drift"] = "up", 0.0, self.rng.exponential(), False, 1.0
         self.log.append(dict(t=self.t, time=str(self.clock()), event="repaired" if state == "down" else "maintained", station=sid))
         if not S["busy"]:
             self.start(sid)
@@ -257,10 +273,17 @@ class LineSim:
         self.push(self.t + max(0.0, in_minutes), "maint", sid)
         self.log.append(dict(t=self.t, time=str(self.clock()), event="schedule_maintenance", station=sid, in_minutes=in_minutes))
 
-    def set_dispatch(self, weights):
+    def set_dispatch(self, weights, hours=None):
         for sid, w in weights.items():
             self.S[sid]["weight"] = max(0.0, float(w))
-        self.log.append(dict(t=self.t, time=str(self.clock()), event="set_dispatch", weights=weights))
+        if hours:  # temporary: back to the observed split after `hours`
+            self.push(self.t + 60.0 * float(hours), "dispatch_revert", list(weights))
+        self.log.append(dict(t=self.t, time=str(self.clock()), event="set_dispatch", weights=weights, hours=hours))
+
+    def _on_dispatch_revert(self, sids):
+        for sid in sids:
+            self.S[sid]["weight"] = 1.0
+        self.log.append(dict(t=self.t, time=str(self.clock()), event="dispatch_revert", stations=sids))
 
     def apply(self, actions):
         for a in actions or []:
@@ -270,11 +293,50 @@ class LineSim:
             elif kind == "schedule_maintenance":
                 self.schedule_maintenance(a["station_id"], a.get("in_minutes", 0.0))
             elif kind == "set_dispatch":
-                self.set_dispatch(a["weights"])
+                self.set_dispatch(a["weights"], a.get("hours"))
             elif kind == "set_hall_coupling":  # e.g. extra cooling
                 self.P["hall_coupling"] = float(a["value"])
+            elif kind == "set_cooling":
+                lvl = a.get("level", "normal")
+                self.P["hall_coupling"] = self.P["cooling_high_coupling"] if lvl == "high" else ASSUMED["hall_coupling"]
+                self.log.append(dict(t=self.t, time=str(self.clock()), event="set_cooling", level=lvl))
             else:
                 raise ValueError(f"unknown action {kind}")
+
+    def inject(self, ev):
+        """scenario events (hidden from the agent; it has to find them through the tools)."""
+        kind = ev["type"]
+        if kind == "degrade":
+            S = self.S[ev["station"]]
+            S["haz"] = S["haz_E"] - 0.9 * self.P["precursor_h"] / self.P["mtbf_h"]
+            S["degraded"] = True
+        elif kind == "breakdown":
+            S = self.S[ev["station"]]
+            if S["state"] == "up":
+                self.stop(S, "down", float(ev["repair_min"]))
+                S["failures"] += 1
+                self.log.append(dict(t=self.t, time=str(self.clock()), event="breakdown", station=S["id"], repair_min=float(ev["repair_min"])))
+        elif kind == "defect_drift":
+            self.S[ev["station"]]["drift"] = float(ev["mult"])
+        elif kind == "heat":
+            self.heat = (self.t, self.t + 60.0 * float(ev["hours"]), float(ev["delta_c"]))
+        elif kind == "rush":
+            self.rush = (self.t, self.t + 60.0 * float(ev["hours"]), float(ev["target_parts"]))
+        else:
+            raise ValueError(f"unknown event {kind}")
+
+    def quality_by_station(self, hours, min_parts=30):
+        """defect rate among the parts completed in the last `hours`, by station visited (as in the Bosch analysis)."""
+        lo = self.t - hours * 60.0
+        vis, bad = defaultdict(int), defaultdict(int)
+        done = [c for c in self.completed if c[0] >= lo]
+        for c in done:
+            for s in set(c[4]):
+                vis[s] += 1
+                bad[s] += c[2]
+        line = sum(c[2] for c in done) / max(len(done), 1)
+        rows = [dict(station_id=s, parts=vis[s], defect_rate=round(bad[s] / vis[s], 4)) for s in self.ids if vis[s] >= min_parts]
+        return dict(hours=hours, parts=len(done), line_defect_rate=round(line, 4), stations=sorted(rows, key=lambda r: -r["defect_rate"]))
 
     def whatif(self, actions, hours, reps=5):
         """run `reps` copies forward with the given actions; the twin itself is not changed. Replication r uses the same
@@ -314,12 +376,21 @@ class LineSim:
         maint_h = (c["maint"] - b["maint"]) / 60.0
         hours = pd.date_range(self.clock(since).floor("h"), self.clock().floor("h"), freq="h")
         out_c = np.array([float(self.climate.get(h, np.nan)) for h in hours])
+        if self.heat:  # injected heat wave
+            hm = np.array([(h - self.t0).total_seconds() / 60.0 for h in hours])
+            out_c = out_c + np.where((hm >= self.heat[0] - 60) & (hm < self.heat[1]), self.heat[2], 0.0)
         hall_c = P["hall_base_c"] + P["hall_coupling"] * (out_c - P["hall_base_c"])
         hvac = float(np.nansum(np.maximum(0.0, out_c - hall_c)) * P["hvac_kw_per_deg"])  # heat removed ~ outdoor - hall
         machine = busy * P["power_busy_kw"] + max(st_h - busy - down_h - maint_h, 0) * P["power_idle_kw"]
         energy = machine + hvac
         nominal = P["arrival_per_min"] * 60.0
         availability = 1.0 - (down_h + maint_h) / max(st_h, 1e-9)
+        cost = energy * P["price_per_kwh"] + defects * P["defect_cost"] + down_h * P["downtime_cost_per_h"]
+        shortfall = 0.0
+        if self.rush and since <= self.rush[0] + 1e-6 and self.t >= self.rush[1] - 1e-6:
+            got = sum(1 for x in done if self.rush[0] <= x[0] <= self.rush[1])
+            shortfall = max(0.0, self.rush[2] - got)
+        net = n * P["value_per_part"] - cost - shortfall * P["shortfall_cost_per_part"]
         return dict(
             hours=round(hrs, 2), throughput_per_h=round(n / hrs, 1), completed=n, defect_rate=round(defects / max(n, 1), 5),
             mean_lead_time_min=round(float(np.mean([x[1] for x in done])) if n else float("nan"), 2),
@@ -328,14 +399,15 @@ class LineSim:
             oee=round(availability * min(1.0, n / hrs / nominal) * (1 - defects / max(n, 1)), 4),
             breakdowns=sum(1 for e in self.log if e["event"] == "breakdown" and e["t"] >= since),
             energy_kwh=round(energy, 1), hvac_kwh=round(hvac, 1),
-            cost=round(energy * P["price_per_kwh"] + defects * P["defect_cost"] + down_h * P["downtime_cost_per_h"], 1),
+            cost=round(cost, 1), shortfall_parts=round(shortfall, 1), net_value=round(net, 1),
             outdoor_c_mean=round(float(np.nanmean(out_c)), 1) if len(out_c) else None)
 
     def station_view(self, sid):
         S = self.S[sid]
         last = {k: v[-1][1] for k, v in S["sensors"].items() if v and k in ("motor_temp", "vibration")}
+        back = dict(back_in_min=round(S["down_until"] - self.t)) if S["state"] != "up" else {}  # technician's repair estimate
         return dict(station_id=sid, state=S["state"], speed_pct=round(S["speed"] * 100), queue=len(S["queue"]), busy=S["busy"],
-                    parts_done=S["done"], failures=S["failures"], parallel_group=S["group"], **last)
+                    parts_done=S["done"], failures=S["failures"], parallel_group=S["group"], **back, **last)
 
     def sensor_history(self, sid, signal, hours):
         lo = self.t - hours * 60.0

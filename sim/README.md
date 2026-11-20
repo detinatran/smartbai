@@ -13,6 +13,7 @@ week takes about 9 s of CPU.
 | Outdoor temperature | hourly Dubai climate 2015–2025 (Open-Meteo) |
 | Arrival rate, nominal utilisation, MTBF/MTTR, temperature sensitivity of the failure rate, sensor models, power, costs | **assumed**; listed in `ASSUMED` and reported with every run, to be replaced by partner data |
 
+A stopped station keeps receiving its share of parts (its queue grows) until it is repaired or the dispatch is changed (`auto_reroute = False`).
 Every breakdown is preceded by a **degradation window** (4 nominal hours by default). In that window motor temperature
 and vibration drift upward and the station produces more defects, so failure prediction has a signal to learn from.
 The failure rate rises with hall temperature, which depends on the Dubai outdoor temperature and on how hard the hall is
@@ -34,7 +35,7 @@ sim.whatif([{"action": "schedule_maintenance", "station_id": "S2"}], hours=24, r
 Actions:
 - `set_speed`;
 - `schedule_maintenance`;
-- `set_dispatch` (load split between parallel stations);
+- `set_dispatch` (load split between parallel stations; optional `hours` after which the normal split returns);
 - `set_hall_coupling` (more or less cooling).
 
 `whatif` runs several replications. Every scenario asked at the same twin time uses the same random streams (common
@@ -42,34 +43,37 @@ random numbers), and the result is the mean ± sd.
 
 ## Validation ([`validate_sim.py`](validate_sim.py))
 
-7 days × 3 seeds, July and January 2025:
+7 days × 3 seeds, July and January 2025 (current simulator, `auto_reroute = False`):
 
 | | Simulator | Bosch |
 |---|---|---|
-| Correlation of per-station visit shares | 0.9999–1.0 (max abs. error 1.0–1.6 pp) | |
-| Correlation of per-station failure rates | 0.98–0.99 | |
-| Overall failure rate | 0.54–0.65% | 0.58% |
-| Failure rate at S32 | 4.4–6.3% | 4.51% |
+| Correlation of per-station visit shares | 1.0 (max abs. error 1.0–1.3 pp) | |
+| Correlation of per-station failure rates | 0.97–0.99 | |
+| Overall failure rate | 0.57–0.63% | 0.58% |
+| Failure rate at S32 | 3.7–6.0% | 4.51% |
 | Median stations per part | 13 | 13 |
 
 Climate effect, with the assumed temperature sensitivity `temp_k = 0.05`:
-- July has about 20% more breakdowns than January (112–127 against 91–105 per week).
+- July has about 23% more breakdowns than January (116–136 against 95–107 per week).
 - HVAC uses about 6,800 kWh/week in July and almost nothing in January.
 
-What-if examples (twin at 2025-07-04 08:00, 5 stations degraded, 5 replications):
+What-if examples (twin at 2025-07-04 08:00, 6 stations degraded, 5 replications):
 
 | Scenario | Output/h | Breakdowns | HVAC (kWh) | Cost |
 |---|---|---|---|---|
-| No action (24 h) | 360 ± 3 | 20.4 ± 2.6 | 1,118 | 6,666 ± 570 |
-| Maintain the 5 degraded stations one after another (24 h) | 354 ± 2 | 17.6 ± 2.7 | 1,118 | 6,232 ± 780 |
-| No action (12 h) | 357 ± 8 | 12.2 ± 0.8 | 766 | 3,755 ± 320 |
-| Extra cooling (12 h) | 349 ± 6 | 10.0 ± 0.7 | 930 | 3,667 ± 270 |
-| S35 slowed to 50% (12 h) | 303 ± 4 | 12.2 ± 1.3 | 766 | 3,600 ± 670 |
-| S35 at 50% + shift load to S36 (12 h) | 318 ± 4 | 11.0 ± 1.2 | 766 | 3,419 ± 370 |
+| No action (24 h) | 357 ± 4 | 25.0 ± 2.4 | 1,118 | 8,177 ± 500 |
+| Maintain the 6 degraded stations one after another (24 h) | 355 ± 4 | 19.4 ± 0.6 | 1,118 | 6,654 ± 740 |
+| No action (12 h) | 351 ± 7 | 15.4 ± 1.1 | 766 | 4,599 ± 370 |
+| Extra cooling (12 h) | 346 ± 9 | 14.2 ± 1.6 | 930 | 4,439 ± 220 |
+| S35 slowed to 50% (12 h) | 306 ± 5 | 14.0 ± 0.7 | 766 | 4,158 ± 500 |
+| S35 at 50% + shift load to S36 (12 h) | 314 ± 5 | 15.6 ± 0.6 | 766 | 4,462 ± 290 |
 
 These are the trade-offs the agent has to weigh:
 - Maintenance reduces breakdowns and cost, but costs some output while the machines are stopped.
 - Extra cooling reduces breakdowns, but raises HVAC energy by about 21%.
+- Shifting load away from a slow station recovers output, but loads its sibling.
+
+The full decision benchmark is in [`../eval`](../eval).
 
 ## Tool server ([`tool_server.py`](tool_server.py))
 

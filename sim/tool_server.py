@@ -2,9 +2,11 @@
 
   GET  /tools                      tool list with JSON schemas
   POST /tool/<name>   {args}       call a tool; every result carries observation_id and t_sim
-  POST /admin/reset   {start, seed, warmup_h, params}   new twin (scenario set-up, not for the agent)
+  POST /admin/reset   {start, seed, warmup_h, params, inject, disabled_tools, case_id, task}   new case (not for the agent)
   POST /admin/advance {minutes}    run the twin forward (scenario clock, not for the agent)
   GET  /admin/observations         every observation issued since reset (for evidence checking)
+  GET  /admin/case                 case id, task, issued actions, observations and the submitted decision (for scoring)
+  GET  /task                       the task text of the current case (for the agent)
 
 predict_failure is a baseline that only uses observable sensors (vibration and motor temperature relative to what the
 station's utilisation explains); it never reads the simulator's hidden failure state. It will be replaced by a model.
@@ -35,7 +37,10 @@ TOOLS = {
                        params={"actions": "list of {action: set_speed|schedule_maintenance|set_dispatch|set_hall_coupling, ...}", "hours": "number <= 48", "reps": "int <= 10 (default 5)"}),
     "schedule_maintenance": dict(description="Stop a station for preventive maintenance (30 min) after in_minutes.", params={"station_id": "string", "in_minutes": "number >= 0"}),
     "set_speed": dict(description="Set a station's speed in percent of nominal (30-150). Faster wears the machine more.", params={"station_id": "string", "pct": "number"}),
-    "set_dispatch": dict(description="Split of parts between parallel stations, e.g. {S35: 0.5, S36: 1.5}.", params={"weights": "object station_id -> weight"}),
+    "set_dispatch": dict(description="Split of parts between parallel stations, e.g. {S35: 0, S36: 1} sends S35's parts to S36. Optional hours: revert to the normal split after that many hours.",
+                         params={"weights": "object station_id -> weight", "hours": "number, optional"}),
+    "get_quality": dict(description="Defect rate among recently completed parts, by station visited (stations with >= 30 parts).", params={"hours": "number <= 24"}),
+    "set_cooling": dict(description="Hall cooling level: normal or high (high keeps the hall cooler at extra HVAC energy).", params={"level": "normal | high"}),
     "submit_decision": dict(description="Final decision of the case. Every number in the report must cite an observation_id.",
                             params={"report": "object: actions, rationale, claims: [{text, value, observation_id}]"}),
 }
@@ -47,11 +52,15 @@ class Twin:
         self.reset({})
 
     def reset(self, a):
+        self.spec = a
         self.sim = LineSim(self.cfg, self.climate, start=a.get("start", "2025-07-03 06:00"), seed=int(a.get("seed", 0)), params=a.get("params"))
         self.sim.run(float(a.get("warmup_h", 24)) * 60)
+        for ev in a.get("inject", []):
+            self.sim.inject(ev)
         self.base_t, self.base_c = self.sim.t, self.sim.counters()
-        self.obs, self.counter, self.decision = {}, itertools.count(1), None
-        return dict(ok=True, time=str(self.sim.clock()), t_sim=round(self.sim.t, 1))
+        self.obs, self.counter, self.decision, self.actions = {}, itertools.count(1), None, []
+        self.disabled = set(a.get("disabled_tools", []))
+        return dict(ok=True, case_id=a.get("case_id"), time=str(self.sim.clock()), t_sim=round(self.sim.t, 1))
 
     def observe(self, tool, args, result):
         oid = f"obs-{next(self.counter):05d}"
@@ -94,17 +103,37 @@ class Twin:
         return dict(hours=h, reps=reps, actions=a.get("actions", []), mean=w["mean"], sd=w["sd"])
 
     def schedule_maintenance(self, a):
-        self.sim.schedule_maintenance(self.sid(a), float(a.get("in_minutes", 0)))
-        return dict(ok=True, station_id=self.sid(a), in_minutes=float(a.get("in_minutes", 0)))
+        act = dict(action="schedule_maintenance", station_id=self.sid(a), in_minutes=float(a.get("in_minutes", 0)))
+        self.sim.apply([act])
+        self.actions.append(act)
+        return dict(ok=True, station_id=act["station_id"], in_minutes=act["in_minutes"])
 
     def set_speed(self, a):
-        self.sim.set_speed(self.sid(a), float(a["pct"]))
-        return dict(ok=True, station_id=self.sid(a), speed_pct=round(self.sim.S[self.sid(a)]["speed"] * 100))
+        act = dict(action="set_speed", station_id=self.sid(a), pct=float(a["pct"]))
+        self.sim.apply([act])
+        self.actions.append(act)
+        return dict(ok=True, station_id=act["station_id"], speed_pct=round(self.sim.S[act["station_id"]]["speed"] * 100))
 
     def set_dispatch(self, a):
-        w = {k: float(v) for k, v in a["weights"].items() if k in self.sim.S}
-        self.sim.set_dispatch(w)
-        return dict(ok=True, weights=w)
+        w = {str(k).upper(): float(v) for k, v in a["weights"].items() if str(k).upper() in self.sim.S}
+        if not w:
+            raise ValueError("weights must map known station ids to numbers")
+        act = dict(action="set_dispatch", weights=w, hours=float(a["hours"]) if a.get("hours") else None)
+        self.sim.apply([act])
+        self.actions.append(act)
+        return dict(ok=True, weights=w, hours=act["hours"])
+
+    def set_cooling(self, a):
+        lvl = str(a.get("level", "normal")).lower()
+        if lvl not in ("normal", "high"):
+            raise ValueError("level must be normal or high")
+        act = dict(action="set_cooling", level=lvl)
+        self.sim.apply([act])
+        self.actions.append(act)
+        return dict(ok=True, level=lvl, hall_c_now=round(self.sim.hall_c(), 1))
+
+    def get_quality(self, a):
+        return self.sim.quality_by_station(min(float(a.get("hours", 4)), 24.0))
 
     def submit_decision(self, a):
         self.decision = a.get("report")
@@ -132,9 +161,15 @@ def make_handler(twin):
 
         def do_GET(self):
             if self.path == "/tools":
-                return self._send(200, TOOLS)
+                return self._send(200, {k: v for k, v in TOOLS.items() if k not in twin.disabled})
             if self.path == "/admin/observations":
                 return self._send(200, dict(observations=list(twin.obs.values()), decision=twin.decision))
+            if self.path == "/admin/case":
+                return self._send(200, dict(case_id=twin.spec.get("case_id"), spec=twin.spec, t_decision=twin.base_t, actions=twin.actions,
+                                            observations=list(twin.obs.values()), decision=twin.decision))
+            if self.path == "/task":
+                return self._send(200, dict(case_id=twin.spec.get("case_id"), task=twin.spec.get("task", ""),
+                                            tools=[t for t in TOOLS if t not in twin.disabled]))
             self._send(404, dict(error="not found"))
 
         def do_POST(self):
@@ -154,6 +189,8 @@ def make_handler(twin):
                         name = self.path[len("/tool/"):]
                         if name not in TOOLS:
                             return self._send(404, dict(error=f"unknown tool {name}", tools=list(TOOLS)))
+                        if name in twin.disabled:
+                            return self._send(403, dict(error=f"tool {name} is not available in this case"))
                         return self._send(200, twin.observe(name, args, getattr(twin, name)(args)))
                 except (ValueError, KeyError, TypeError) as e:  # tool errors go back to the model as observations
                     return self._send(400, dict(error=f"{type(e).__name__}: {e}"))

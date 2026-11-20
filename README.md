@@ -17,7 +17,7 @@ agent makes must cite an observation produced by the twin.
 | Bottling-line demo scene v1 | done |
 | Discrete-event simulator and HTTP tool server | done (validated against the Bosch data) |
 | LLM adapter | in progress |
-| Evaluation scenarios | to do |
+| Decision benchmark (30 pre-registered cases, oracle, scorer, rule baseline) | done ([`eval/`](eval)) |
 
 ![Twin v2: Bosch-derived topology; machine colour encodes the real failure rate](docs/img/twin_v2_overview.jpg)
 
@@ -95,15 +95,15 @@ curl -X POST localhost:8765/tool/run_whatif -d '{"actions": [{"action": "schedul
 
 | | Simulator | Bosch |
 |---|---|---|
-| Correlation of per-station visit shares | 0.9999–1.0 (max abs. error 1.0–1.6 pp) | |
-| Correlation of per-station failure rates | 0.98–0.99 | |
-| Overall failure rate | 0.54–0.65% | 0.58% |
-| Failure rate at S32 | 4.4–6.3% | 4.51% |
+| Correlation of per-station visit shares | 1.0 (max abs. error 1.0–1.3 pp) | |
+| Correlation of per-station failure rates | 0.97–0.99 | |
+| Overall failure rate | 0.57–0.63% | 0.58% |
+| Failure rate at S32 | 3.7–6.0% | 4.51% |
 | Median stations per part | 13 | 13 |
 
 Some parameters are not in any public data: MTBF, repair times, temperature sensitivity, sensor models, power and costs.
 They are explicit assumptions in `ASSUMED`, reported with every run, until partner data replace them. With the current
-assumptions, July produces about 20% more breakdowns than January, and HVAC uses about 6,800 kWh/week in July against
+assumptions, July produces about 23% more breakdowns than January, and HVAC uses about 6,800 kWh/week in July against
 almost none in January.
 
 ## Architecture
@@ -160,6 +160,7 @@ outside the UAE when we tried. Data from the project's partner SMEs will replace
 | [`PLAN.md`](PLAN.md) | plan and steps (Vietnamese) |
 | [`docs/adapter_interface.md`](docs/adapter_interface.md) | interface between the twin and the LLM adapter: tools, evidence rules, runtime limits (Vietnamese) |
 | [`sim/`](sim) | discrete-event simulator, validation, HTTP tool server |
+| [`eval/`](eval) | decision benchmark: pre-registered protocol, 30 cases, oracle, scorer, rule and no-action agents, case runner |
 | [`twin/build_bosch_line.py`](twin/build_bosch_line.py) | twin v2 scene from the Bosch-derived configuration |
 | [`twin/build_line.py`](twin/build_line.py), [`twin/line_config.py`](twin/line_config.py) | bottling-line demo scene v1 and its station definitions |
 | [`twin/isaac_smoke.py`](twin/isaac_smoke.py) | Isaac Sim headless smoke test (physics + Replicator render) |
