@@ -153,3 +153,62 @@ Estimated compute on 12 CPU workers:
 - twin testing: about 70 s per case per proposer;
 - harm labels: about 35 s per distinct executed action;
 - all splits: about 4 h, without the optional plant oracle (about 7 h).
+
+## Amendment 1 (2026-11-20, before the calibration split is run)
+Where these faults were found:
+- a test of the twin on three cases of `EVAL_PROTOCOL.md` (breakdown_3, quality_3, degradation_0);
+- reading the code.
+
+No case of this protocol had been run when they were found.
+
+1. **Degradation probability.** The `predict_failure` score is not a calibrated probability: many running stations
+   scored 0.96–0.98. A twin sampling degradation from it overpredicted breakdowns, by 1,300–2,600 net-value units
+   below the plant under no action. Fix: p_i is the output of a logistic model P(degraded now | the two `predict_failure`
+   features).
+   - It is fitted by `sim/fit_failure_model.py` on simulations with the nominal parameters, never on plant cases
+     (seeds 900000+, 24 runs × 3 days, May–September 2025).
+   - Binned calibration: mean predicted 0.50 against 0.51 observed; 0.93 against 0.89.
+   - The `predict_failure` tool shown to agents is unchanged.
+2. **Defect-drift estimator.** The formula (k_i + 1)/(E_i + 1) mixes part-level and station-level rates: a part that
+   visited a station carries the defects of its whole route. In one case a z-score version attributed a ×136 drift to a
+   station with few parts. Fix (`sim/twin_sync.py`, `estimate_drift`):
+   - take the station with the smallest Poisson tail p-value P(Poisson(E_i) ≥ k_i);
+   - if that p-value is below 0.01/39, attribute the excess to it: drift_i = 1 + (k_i − E_i)/(n_i · nominal p_i);
+   - update the expectations and repeat, at most 3 times.
+3. **Events left no trace at the decision time.** Degradation and defect drift were injected at the decision time.
+   Sensors and quality data could not show them yet, so no method using observables could detect them. Fix:
+   - degradation is injected 90 min before the decision time, and defect drift 180 min before;
+   - the target station is drawn among stations running and not degraded at injection time;
+   - the station may break down before the decision time, and such cases are kept.
+4. **LTT screening.** As written, the most conservative thresholds select no case (p_k = 1), so testing would stop at
+   once. Fix, following Messoudi & Mansar (arXiv 2610.19811):
+   - thresholds selecting fewer than n_min = ⌈log δ / log(1 − α)⌉ = 22 calibration cases are skipped;
+   - a skipped threshold is neither tested nor a reason to stop.
+
+   Screening depends on the scores only, not on the harm labels.
+5. **Details fixed in code.**
+   - The twin uses the nominal per-station defect probabilities.
+   - Plant cooling "normal" returns to the plant's own hall coupling. Before this fix it returned to the nominal value,
+     which was a simulator bug; with the nominal plant it has no effect.
+   - Random streams:
+     - twin replication r samples its hidden state from [case seed, 7, r] and runs on [case seed, 7, r, 1], for every
+       proposer;
+     - plant labels use replications 1,000,000 + r of the plant's own streams, disjoint from the oracle (0–7) and from
+       the twin.
+
+The rest of the protocol is unchanged.
+
+## Amendment 2 (2026-11-20, after the dev split, before the calibration split is run)
+The dev split (36 cases, rule and random-5 proposers) showed that the harm label was mostly noise.
+- With 32 plant replications, the standard error of Δ_plant had a median of about 330 net-value units.
+- An action with no effect was therefore labelled harmful about half of the time, so the risk the gate had to control
+  was mostly measurement noise.
+
+Changes:
+- **Harm label.** harm = 1 if Δ_plant < −m, where m = 1% of the case's plant no-action mean net value over 12 h
+  (about 380 units). This is a non-inferiority margin, so the claim becomes P(material harm | executed) ≤ α.
+- **Plant replications** rise from 32 to 96 (standard error about 190). An action with no effect is then mislabelled
+  with probability about 2%.
+
+The method is not changed: K, n0, the round size, B, the elimination rule, the score, the τ grid, α and δ. The dev
+results are not used for anything but this fix and are not reported as results.

@@ -99,3 +99,11 @@ synchronisation and hidden-state sampling are those of [`CERTIFY_PROTOCOL.md`](C
 twin"), with the plant parameters equal to `ASSUMED`. The what-if replication streams are disjoint from the oracle's.
 
 The oracle, the rule results and the no-action results do not use `run_whatif` and are unchanged.
+
+The twin's degradation model is the one of CERTIFY_PROTOCOL amendment 1. The tool server needs it for `run_whatif`
+(`--failure-model`).
+
+**Known limitation, not fixed here.** Degradation and quality events are injected at the decision time. At that moment
+neither sensors nor quality data show them. In those two families, an agent that uses observables cannot detect the
+event, and the families mostly measure generic actions. Fixing this would change the cases after the baseline results
+were seen, so the fix (events injected before the decision time) is made in CERTIFY_PROTOCOL amendment 1 instead.

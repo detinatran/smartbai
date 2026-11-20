@@ -7,7 +7,7 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import HORIZON_H, REPS, build_state, evaluate, load_inputs  # noqa: E402
+from common import GENERIC, HORIZON_H, P_SHORT, REPS, RUSH, build_state, evaluate, load_inputs  # noqa: E402
 
 cfg, climate = load_inputs(sys.argv[1], sys.argv[2])
 rng = np.random.default_rng(2026)
@@ -15,14 +15,6 @@ st = cfg["stations"]
 ids = [s["id"] for s in st]
 share = np.array([s["share_parts"] for s in st])
 par = [s["id"] for s in st if len(s["parallel_group"]) > 1]
-P_VALUE, P_SHORT = 10.0, 40.0
-
-GENERIC = ("You are the supervisor of this production line. The current twin time is {time}. Use the tools to check the line, "
-           "then take the actions you think are best for the next 12 hours (taking no action is allowed). Finally call "
-           "submit_decision with your actions, your rationale and claims that cite observation_ids. Objective: maximise net "
-           "value over the next 12 hours = value of completed parts minus energy, defect and unplanned-downtime costs.")
-RUSH = " A customer needs at least {n} completed parts in the next 12 hours; every part short costs {c:.0f} units."
-
 cases = []
 families = ["degradation", "breakdown", "quality", "heat", "rush"]
 for f_i, fam in enumerate(families):

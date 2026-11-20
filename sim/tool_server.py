@@ -23,7 +23,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from line_sim import LineSim, load_climate  # noqa: E402
+from line_sim import build_from_spec, load_climate  # noqa: E402
+from twin_sync import TwinModel, failure_score  # noqa: E402
 
 TOOLS = {
     "get_line_state": dict(description="State of every station, queues and the line KPIs since the start of the current shift view.", params={}),
@@ -47,16 +48,14 @@ TOOLS = {
 
 
 class Twin:
-    def __init__(self, cfg, climate):
+    def __init__(self, cfg, climate, failure_model=None):
         self.cfg, self.climate, self.lock = cfg, climate, threading.Lock()
+        self.failure_model = failure_model  # degradation model of the what-if twin (sim/fit_failure_model.py)
         self.reset({})
 
     def reset(self, a):
         self.spec = a
-        self.sim = LineSim(self.cfg, self.climate, start=a.get("start", "2025-07-03 06:00"), seed=int(a.get("seed", 0)), params=a.get("params"))
-        self.sim.run(float(a.get("warmup_h", 24)) * 60)
-        for ev in a.get("inject", []):
-            self.sim.inject(ev)
+        self.sim = build_from_spec(self.cfg, self.climate, dict(a, start=a.get("start", "2025-07-03 06:00"), seed=int(a.get("seed", 0))))
         self.base_t, self.base_c = self.sim.t, self.sim.counters()
         self.obs, self.counter, self.decision, self.actions = {}, itertools.count(1), None, []
         self.disabled = set(a.get("disabled_tools", []))
@@ -83,23 +82,21 @@ class Twin:
 
     def predict_failure(self, a):
         sid, hz = self.sid(a), float(a.get("horizon_h", 4))
-        S = self.sim.S[sid]
-        vib = [v for _, v in self.sim.sensor_history(sid, "vibration", 1.0)]
-        tmp = [v for _, v in self.sim.sensor_history(sid, "motor_temp", 1.0)]
-        if not vib or S["state"] != "up":
-            return dict(station_id=sid, horizon_h=hz, probability=None, note=f"station is {S['state']}")
-        util = min(1.0, S["busy_time"] / max(self.sim.t, 1.0))
-        excess_v = float(np.mean(vib)) - (0.9 + 0.6 * util)          # vibration not explained by load
-        excess_t = float(np.mean(tmp)) - (self.sim.hall_c() + 14 * util)
-        z = 4.0 * excess_v + 0.25 * excess_t - 1.5
-        p_now = 1 / (1 + math.exp(-z))
-        p = 1 - (1 - p_now) ** max(hz / 4.0, 0.25)
-        return dict(station_id=sid, horizon_h=hz, probability=round(p, 3), evidence=dict(vibration_excess=round(excess_v, 3), motor_temp_excess_c=round(excess_t, 2)),
+        p, ev = failure_score(self.sim, sid, hz)
+        if p is None:
+            return dict(station_id=sid, horizon_h=hz, probability=None, note=f"station is {self.sim.S[sid]['state']}")
+        return dict(station_id=sid, horizon_h=hz, probability=round(p, 3), evidence=ev,
                     model="baseline: logistic on load-adjusted vibration and motor temperature (last hour)")
 
     def run_whatif(self, a):
         h, reps = min(float(a.get("hours", 12)), 48.0), int(min(int(a.get("reps", 5)), 10))
-        w = self.sim.whatif(a.get("actions", []), h, reps=reps)
+        # the twin sees observables only (EVAL_PROTOCOL amendment 2, CERTIFY_PROTOCOL "Plant and twin")
+        tw = self.spec.get("twin", {})
+        if self.failure_model is None:
+            raise ValueError("run_whatif needs the twin's degradation model: start the server with --failure-model")
+        model = TwinModel(self.sim, failure_model=self.failure_model, seed=[int(self.spec.get("seed", 0)), 7, int(self.sim.t * 1000)], params=tw.get("params"),
+                          forecast_bias=float(tw.get("forecast_bias", 0.0)), horizon_h=h)
+        w = model.whatif(a.get("actions", []), h, reps=reps)
         return dict(hours=h, reps=reps, actions=a.get("actions", []), mean=w["mean"], sd=w["sd"])
 
     def schedule_maintenance(self, a):
@@ -206,8 +203,9 @@ if __name__ == "__main__":
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--start", default="2025-07-03 06:00")
     ap.add_argument("--warmup-h", type=float, default=24)
+    ap.add_argument("--failure-model", help="JSON written by sim/fit_failure_model.py (needed for run_whatif)")
     a = ap.parse_args()
-    twin = Twin(json.load(open(a.config)), load_climate(a.climate))
+    twin = Twin(json.load(open(a.config)), load_climate(a.climate), json.load(open(a.failure_model)) if a.failure_model else None)
     twin.reset(dict(start=a.start, warmup_h=a.warmup_h))
     print(f"smartbai tool server on http://{a.host}:{a.port}  twin time {twin.sim.clock()}", flush=True)
     ThreadingHTTPServer((a.host, a.port), make_handler(twin)).serve_forever()

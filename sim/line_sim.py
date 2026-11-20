@@ -40,6 +40,7 @@ ASSUMED = dict(
     shortfall_cost_per_part=40.0,  # rush orders: penalty per part below the target
     cooling_high_coupling=0.15,    # hall coupling when cooling is set to "high"
     auto_reroute=False,         # False: parts follow the dispatch weights even to a stopped station (queue builds up)
+    repair_est_sigma=0.0,       # noise of the technician's repair estimate (back_in_min): true x lognormal(0, sigma)
     sensor_period_min=10.0,
 )
 
@@ -57,6 +58,7 @@ class LineSim:
         self.cfg, self.climate = cfg, climate
         self.t0 = pd.Timestamp(start)
         self.rng = np.random.default_rng(seed)
+        self.est_rng = np.random.default_rng([int(seed), 99])  # separate stream: estimates never change the trajectory
         self.t = 0.0
         self.ev, self.k = [], 0
         st = {s["id"]: s for s in cfg["stations"]}
@@ -98,12 +100,13 @@ class LineSim:
                 p_defect=(base_defect + max(0.0, st[s]["fail_rate"] - avg)), speed=1.0, state="up", down_until=0.0,
                 queue=deque(), busy=False, busy_since=0.0, busy_time=0.0, down_time=0.0, maint_time=0.0,
                 haz=0.0, haz_E=self.rng.exponential(), degraded=False, failures=0, done=0, defects_made=0,
-                weight=1.0, sensors=defaultdict(list), util_window=0.0, drift=1.0)
+                weight=1.0, sensors=defaultdict(list), util_window=0.0, drift=1.0, stop_t=0.0, est_until=0.0)
         self.parts_in = 0
         self.completed = []  # (t_out, lead_time, defect, n_stations, path)
         self.log = []        # breakdowns, repairs, actions
         self.heat = None     # (t_start, t_end, delta_c): injected heat wave
         self.rush = None     # (t_start, t_end, target_parts): injected rush order
+        self.base_coupling, self.cooling = self.P["hall_coupling"], "normal"
         self._last_sensor = 0.0
         self.push(self.rng.exponential(1 / lam), "arrive", None)
         self.push(0.0, "hour", None)
@@ -226,7 +229,9 @@ class LineSim:
         self.push(self.t + 60.0, "hour", None)
 
     def stop(self, S, state, minutes):
-        S["state"], S["down_until"] = state, self.t + minutes
+        S["state"], S["down_until"], S["stop_t"] = state, self.t + minutes, self.t
+        sig = self.P["repair_est_sigma"]
+        S["est_until"] = self.t + minutes * (float(self.est_rng.lognormal(0.0, sig)) if sig > 0 else 1.0)
         if S["busy"]:
             S["busy_time"] += self.t - S["busy_since"]
             S["busy_since"] = S["down_until"]
@@ -298,7 +303,8 @@ class LineSim:
                 self.P["hall_coupling"] = float(a["value"])
             elif kind == "set_cooling":
                 lvl = a.get("level", "normal")
-                self.P["hall_coupling"] = self.P["cooling_high_coupling"] if lvl == "high" else ASSUMED["hall_coupling"]
+                self.P["hall_coupling"] = self.P["cooling_high_coupling"] if lvl == "high" else self.base_coupling
+                self.cooling = lvl
                 self.log.append(dict(t=self.t, time=str(self.clock()), event="set_cooling", level=lvl))
             else:
                 raise ValueError(f"unknown action {kind}")
@@ -338,14 +344,14 @@ class LineSim:
         rows = [dict(station_id=s, parts=vis[s], defect_rate=round(bad[s] / vis[s], 4)) for s in self.ids if vis[s] >= min_parts]
         return dict(hours=hours, parts=len(done), line_defect_rate=round(line, 4), stations=sorted(rows, key=lambda r: -r["defect_rate"]))
 
-    def whatif(self, actions, hours, reps=5):
+    def whatif(self, actions, hours, reps=5, seed_offset=0):
         """run `reps` copies forward with the given actions; the twin itself is not changed. Replication r uses the same
         random stream for every scenario asked at the same twin time (common random numbers), so differences between
         scenarios are not just noise. Returns mean, sd and per-replication KPIs."""
         runs = []
         for r in range(reps):
             sim = copy.deepcopy(self)
-            sim.rng = np.random.default_rng([int(self.t * 1000), r])
+            sim.rng = np.random.default_rng([int(self.t * 1000), seed_offset + r])
             t_start, base = sim.t, sim.counters()
             sim.apply(actions)
             sim.run(hours * 60.0)
@@ -405,10 +411,24 @@ class LineSim:
     def station_view(self, sid):
         S = self.S[sid]
         last = {k: v[-1][1] for k, v in S["sensors"].items() if v and k in ("motor_temp", "vibration")}
-        back = dict(back_in_min=round(S["down_until"] - self.t)) if S["state"] != "up" else {}  # technician's repair estimate
+        back = dict(back_in_min=max(0, round(S["est_until"] - self.t))) if S["state"] != "up" else {}  # technician's repair estimate
         return dict(station_id=sid, state=S["state"], speed_pct=round(S["speed"] * 100), queue=len(S["queue"]), busy=S["busy"],
                     parts_done=S["done"], failures=S["failures"], parallel_group=S["group"], **back, **last)
 
     def sensor_history(self, sid, signal, hours):
         lo = self.t - hours * 60.0
         return [(round(t, 1), v) for t, v in self.S[sid]["sensors"][signal] if t >= lo]
+
+
+def build_from_spec(cfg, climate, spec):
+    """line state at the decision time of a case spec: warm-up, then the injected events. An event with lead_min > 0 is
+    injected that many minutes before the decision time, so its effects can show in the observations (CERTIFY_PROTOCOL
+    amendment 1); events without lead_min are injected at the decision time, as in EVAL_PROTOCOL."""
+    sim = LineSim(cfg, climate, start=spec["start"], seed=int(spec["seed"]), params=spec.get("params"))
+    end = float(spec.get("warmup_h", 24)) * 60.0
+    for ev in sorted(spec.get("inject", []), key=lambda e: -float(e.get("lead_min", 0))):
+        sim.run(max(end - float(ev.get("lead_min", 0)) - sim.t, 0.0))
+        sim.inject(ev)
+    sim.run(max(end - sim.t, 0.0))
+    return sim
+

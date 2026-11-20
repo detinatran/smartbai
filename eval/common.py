@@ -7,10 +7,18 @@ from functools import lru_cache
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sim"))
-from line_sim import LineSim, load_climate  # noqa: E402
+from line_sim import LineSim, build_from_spec, load_climate  # noqa: E402
 
 HORIZON_H = 12.0
 REPS = 8
+P_SHORT = 40.0  # rush orders: cost per part short (= ASSUMED shortfall_cost_per_part)
+
+GENERIC = ("You are the supervisor of this production line. The current twin time is {time}. Use the tools to check the line, "
+           "then take the actions you think are best for the next 12 hours (taking no action is allowed). Finally call "
+           "submit_decision with your actions, your rationale and claims that cite observation_ids. Objective: maximise net "
+           "value over the next 12 hours = value of completed parts minus energy, defect and unplanned-downtime costs.")
+RUSH = " A customer needs at least {n} completed parts in the next 12 hours; every part short costs {c:.0f} units."
+
 
 
 @lru_cache(maxsize=1)
@@ -19,12 +27,8 @@ def load_inputs(config_path, climate_path):
 
 
 def build_state(spec, cfg, climate):
-    """twin state at the decision time of a case: warm-up, then the injected events (deterministic)."""
-    sim = LineSim(cfg, climate, start=spec["start"], seed=int(spec["seed"]), params=spec.get("params"))
-    sim.run(float(spec.get("warmup_h", 24)) * 60)
-    for ev in spec.get("inject", []):
-        sim.inject(ev)
-    return sim
+    """state at the decision time of a case: warm-up, then the injected events (deterministic)."""
+    return build_from_spec(cfg, climate, spec)
 
 
 def evaluate(sim, actions, hours=HORIZON_H, reps=REPS):
