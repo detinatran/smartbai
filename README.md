@@ -4,7 +4,9 @@
 
 "Cognitive" ở đây có nghĩa cụ thể như sau. Twin không chỉ hiển thị dữ liệu. Một LLM agent **đọc trạng thái twin, chạy mô phỏng what-if trong twin để kiểm chứng, rồi mới đề xuất hành động**. Mọi khẳng định của agent phải dựa trên quan sát từ twin.
 
-> Trạng thái: giai đoạn đầu. Isaac Sim đã chạy headless (vật lý + render). Scene dây chuyền, server tool và adapter LLM chưa làm.
+> Trạng thái: Isaac Sim chạy headless; **scene dây chuyền v1 đã dựng** (`twin/build_line.py`). Bộ mô phỏng sự kiện, server tool và adapter LLM chưa làm.
+
+![Dây chuyền đóng chai smartbai v1](docs/img/line_v1_end_of_line.jpg)
 
 ## Kiến trúc
 
@@ -55,6 +57,9 @@ Không có dữ liệu cấp máy của nhà máy Dubai nào công khai. Dữ li
 | [`PLAN.md`](PLAN.md) | kế hoạch và các bước |
 | [`docs/adapter_interface.md`](docs/adapter_interface.md) | **giao diện giữa twin và adapter LLM** (danh sách tool, quy tắc bằng chứng, ràng buộc chạy) |
 | [`twin/isaac_smoke.py`](twin/isaac_smoke.py) | test headless Isaac Sim: vật lý + render Replicator |
+| [`twin/line_config.py`](twin/line_config.py) | định nghĩa dây chuyền: 7 trạm (ID, loại, công suất, cảm biến), dùng chung cho scene, mô phỏng và server tool |
+| [`twin/build_line.py`](twin/build_line.py) | dựng scene trong nhà kho NVIDIA: băng chuyền con lăn, máy chiết/đóng nắp/dán nhãn, camera QC, robot UR10/UR5e, pallet; lưu USD và render 5 góc (`docs/img/`) |
+| [`data_tools/fetch_bayanat.py`](data_tools/fetch_bayanat.py) | tải 24 bộ thống kê công nghiệp/sản xuất UAE từ bayanat.ae (bản đầy đủ qua API của cổng) |
 | [`modules/qc_visa/`](modules/qc_visa) | baseline phát hiện lỗi sản phẩm trên VisA (PatchCore, ResNet-50), protocol chốt trước; chưa chạy |
 
 ## Cài đặt Isaac Sim (Windows, đã kiểm tra)
