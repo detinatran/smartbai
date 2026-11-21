@@ -94,7 +94,8 @@ if __name__ == "__main__":
     a = ap.parse_args()
     fm = json.load(open(a.failure_model))
     llm = {json.loads(l)["case_id"]: json.loads(l) for l in open(a.llm_proposals)} if a.llm_proposals else {}
-    done = {json.loads(l)["case_id"] for l in open(a.out)} if os.path.exists(a.out) else set()
+    # cases with a result are skipped; error rows stay in the file (every case is reported) but the case is run again
+    done = {r["case_id"] for r in map(json.loads, open(a.out)) if r["proposer"] != "error"} if os.path.exists(a.out) else set()
     specs = [c for c in json.load(open(a.cases))["cases"] if c["split"] == a.split and c["case_id"] not in done]
     if a.llm_proposals:
         missing = [c["case_id"] for c in specs if c["case_id"] not in llm]
