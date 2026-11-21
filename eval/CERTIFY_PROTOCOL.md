@@ -212,3 +212,47 @@ Changes:
 
 The method is not changed: K, n0, the round size, B, the elimination rule, the score, the τ grid, α and δ. The dev
 results are not used for anything but this fix and are not reported as results.
+
+## Result of the protocol as amended up to amendment 2 (v1, 2026-11-21)
+Calibration and test splits were run once each (rule and random-5 proposers; no LLM proposals).
+- LTT certified no threshold for either proposer: on calibration, the most conservative testable threshold selected
+  24 cases with 7 (rule) and 5 (random-5) harms. Both Certify conditions therefore abstained on all 210 test cases.
+- H1: not refuted, trivially (0 executed). H2: 7/48 harmful, p = 0.20, Holm 0.40, not supported. H3: G = 0, not
+  supported. H4: dropped (no LLM proposer).
+- On the test split the twin score was not informative: for the rule proposer the harm rate among executed actions
+  was 0.19 at coverage 0.15 (τ = 250) and 0.08 at full coverage.
+This result is reported as it is. Amendment 3 is a new run on fresh calibration and test seeds (v2), not a re-analysis.
+
+## Amendment 3 (2026-11-21, after the v1 result, before any v2 calibration or test case is run)
+Diagnosis on the dev seeds only (20000+: the 6 dev cases per family and 30 extra rush and 30 extra quiet cases drawn
+with the same generator; `eval/certify/diag_twin.py`):
+- **Common random numbers did not work.** The simulator drew arrivals, routing, service times, defects, failure clocks,
+  repairs and sensor noise from one random stream. Any action shifted every later draw, so paired differences were
+  nearly as noisy as unpaired ones, both in the twin and in the plant labels.
+- **The rush family amplified this.** While a rush order is short, a part is worth its value plus the shortfall
+  penalty (10 + 40 units), so throughput noise is multiplied about five times. With 96 plant replications the median
+  SE of the rush harm label was about 1,180 units against a margin of about 380, so an action with no effect was
+  labelled harmful about 36% of the time (other families: 1–10%). In the v1 calibration split, 16 of 35 rush cases
+  were labelled harmful for each proposer.
+- With one stream per purpose and station, the twin's mean gain on dev rush cases matched the plant's
+  (speed_trunk_115: twin +1,257, plant +1,370; avoid_S16: −11,162 vs −11,554), and the median paired SE fell 2–5 times.
+  The per-case correlation of twin and plant gains stays low (0.1–0.35 for most probes): the plant's failure clocks
+  are hidden and the twin samples them, which the twin SE reflects.
+
+Changes:
+1. **Random streams** (`sim/line_sim.py`, `rng_streams = "split"`): arrivals, entry choice, and per station routing,
+   service, defects, failure clocks and repairs, plus sensor noise, each have their own stream derived from the
+   replication seed. The twin and the plant use the same simulator. An action that does not change a station's draws
+   leaves them aligned; an inert action gives exactly the no-action result.
+2. **Plant label replications** (`eval/certify/run.py`): paired plant replications start at 96 and grow in batches of
+   96, with the same batches for no action, until SE(Δ_plant) ≤ m/2 or 768 replications. The margin m is fixed from
+   the first 96 no-action replications. An action with no effect is then mislabelled with probability about 2%
+   whenever the cap is not reached; the number of replications is reported per case.
+3. **Degradation model** refitted with the new simulator by the same procedure (`sim/fit_failure_model.py`, seeds
+   900000+, nominal parameters).
+4. **Fresh splits.** Calibration seeds 60000+ and test seeds 70000+ (35 cases per family each, same generator).
+   The dev split (20000+) is unchanged and is used only to check that the code runs.
+
+Unchanged: the method (K, n0, round size, B, elimination rule, score, τ grid, α = δ = 0.10, LTT screening), the plant
+factor range, the observation noise, the hidden-state sampling, the harm definition and margin, the conditions, and
+the hypotheses with their tests. v2 is run once: calibration, then test.

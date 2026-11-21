@@ -42,7 +42,11 @@ ASSUMED = dict(
     auto_reroute=False,         # False: parts follow the dispatch weights even to a stopped station (queue builds up)
     repair_est_sigma=0.0,       # noise of the technician's repair estimate (back_in_min): true x lognormal(0, sigma)
     sensor_period_min=10.0,
+    rng_streams="split",        # "split": one random stream per purpose and station (CERTIFY amendment 3);
+                                # "single": one stream for everything (the simulator before amendment 3)
 )
+
+_KIND = dict(arrive=1, entry=2, route=3, service=4, defect=5, fail=6, repair=7, sensor=8)
 
 
 def load_climate(path):
@@ -57,7 +61,7 @@ class LineSim:
         self.P = dict(ASSUMED, **(params or {}))
         self.cfg, self.climate = cfg, climate
         self.t0 = pd.Timestamp(start)
-        self.rng = np.random.default_rng(seed)
+        self.reseed(seed)
         self.est_rng = np.random.default_rng([int(seed), 99])  # separate stream: estimates never change the trajectory
         self.t = 0.0
         self.ev, self.k = [], 0
@@ -99,7 +103,7 @@ class LineSim:
                 id=s, group=st[s]["parallel_group"], mean_service=self.P["target_util"] / max(lam * st[s]["share_parts"], 1e-6),
                 p_defect=(base_defect + max(0.0, st[s]["fail_rate"] - avg)), speed=1.0, state="up", down_until=0.0,
                 queue=deque(), busy=False, busy_since=0.0, busy_time=0.0, down_time=0.0, maint_time=0.0,
-                haz=0.0, haz_E=self.rng.exponential(), degraded=False, failures=0, done=0, defects_made=0,
+                haz=0.0, haz_E=self.R("fail", s).exponential(), degraded=False, failures=0, done=0, defects_made=0,
                 weight=1.0, sensors=defaultdict(list), util_window=0.0, drift=1.0, stop_t=0.0, est_until=0.0)
         self.parts_in = 0
         self.completed = []  # (t_out, lead_time, defect, n_stations, path)
@@ -108,7 +112,7 @@ class LineSim:
         self.rush = None     # (t_start, t_end, target_parts): injected rush order
         self.base_coupling, self.cooling = self.P["hall_coupling"], "normal"
         self._last_sensor = 0.0
-        self.push(self.rng.exponential(1 / lam), "arrive", None)
+        self.push(self.R("arrive").exponential(1 / lam), "arrive", None)
         self.push(0.0, "hour", None)
         self.push(0.0, "sensor", None)
 
@@ -135,9 +139,28 @@ class LineSim:
         b = self.P["hall_base_c"]
         return b + self.P["hall_coupling"] * (self.outdoor_c(t) - b)
 
-    def lognormal(self, mean, cv):
+    def reseed(self, seed):
+        """restart the random streams from `seed` (an int or a list of ints). With rng_streams = "split" every purpose
+        (arrivals, entry choice, and per station: routing, service, defects, failure clocks, repairs; sensor noise) has
+        its own stream, so an action that changes one station's draws leaves the others aligned under common random
+        numbers."""
+        self._entropy = [int(x) for x in (seed if isinstance(seed, (list, tuple)) else [seed])]
+        self._streams = {}
+        self.rng = np.random.default_rng(self._entropy)
+
+    def R(self, kind, sid=None):
+        if self.P.get("rng_streams", "split") != "split":
+            return self.rng
+        key = (kind, sid)
+        g = self._streams.get(key)
+        if g is None:
+            idx = 0 if sid is None else 1 + self.ids.index(sid)
+            g = self._streams[key] = np.random.default_rng(self._entropy + [1000 + _KIND[kind], idx])
+        return g
+
+    def lognormal(self, mean, cv, gen=None):
         s2 = math.log(1 + cv * cv)
-        return float(self.rng.lognormal(math.log(mean) - s2 / 2, math.sqrt(s2)))
+        return float((gen or self.rng).lognormal(math.log(mean) - s2 / 2, math.sqrt(s2)))
 
     # ------------------------------------------------------------------ part flow
     def enqueue(self, sid, part):
@@ -157,18 +180,19 @@ class LineSim:
             return
         part = S["queue"].popleft()
         S["busy"], S["busy_since"] = True, self.t
-        self.push(self.t + self.lognormal(S["mean_service"] / S["speed"], self.P["service_cv"]), "done", (sid, part))
+        self.push(self.t + self.lognormal(S["mean_service"] / S["speed"], self.P["service_cv"], self.R("service", sid)), "done", (sid, part))
 
     def pick_next(self, sid):
         dst, p = self.route[sid]
-        nxt = dst[self.rng.choice(len(dst), p=p)]
+        g = self.R("route", sid)
+        nxt = dst[g.choice(len(dst), p=p)]
         if nxt is None:
             return None
         grp = self.S[nxt]["group"]
         if len(grp) > 1:  # within a parallel group use the dispatch weights (default = observed split)
             w = np.array([self.S[g]["weight"] * self.parts_cfg[g] for g in grp], float)
             if w.sum() > 0:
-                nxt = grp[self.rng.choice(len(grp), p=w / w.sum())]
+                nxt = grp[g.choice(len(grp), p=w / w.sum())]
         return nxt
 
     # ------------------------------------------------------------------ main loop
@@ -183,14 +207,15 @@ class LineSim:
 
     def _on_arrive(self, _):
         self.parts_in += 1
-        sid = self.entry[0][self.rng.choice(len(self.entry[0]), p=self.entry[1])]
+        g = self.R("entry")
+        sid = self.entry[0][g.choice(len(self.entry[0]), p=self.entry[1])]
         grp = [g for g in self.S[sid]["group"] if g in self.entry_p]
         if len(grp) > 1:  # parallel entry stations follow the dispatch weights too
             w = np.array([self.S[g]["weight"] * self.entry_p[g] for g in grp])
             if w.sum() > 0:
-                sid = grp[self.rng.choice(len(grp), p=w / w.sum())]
+                sid = grp[g.choice(len(grp), p=w / w.sum())]
         self.enqueue(sid, dict(id=self.parts_in, t_in=self.t, defect=False, n=0, path=[]))
-        self.push(self.t + self.rng.exponential(1 / self.P["arrival_per_min"]), "arrive", None)
+        self.push(self.t + self.R("arrive").exponential(1 / self.P["arrival_per_min"]), "arrive", None)
 
     def _on_done(self, data):
         sid, part = data
@@ -202,7 +227,7 @@ class LineSim:
         S["busy_time"] += self.t - S["busy_since"]
         S["done"] += 1
         p = S["p_defect"] * S["drift"] * (self.P["degraded_defect_mult"] if S["degraded"] else 1.0)
-        if self.rng.random() < p:
+        if self.R("defect", sid).random() < p:
             part["defect"] = True
             S["defects_made"] += 1
         part["n"] += 1
@@ -222,7 +247,7 @@ class LineSim:
             S["haz"] += f_t * S["speed"] ** 2 / self.P["mtbf_h"]
             S["degraded"] = S["haz"] >= S["haz_E"] - self.P["precursor_h"] / self.P["mtbf_h"]
             if S["haz"] >= S["haz_E"]:
-                rep = self.lognormal(self.P["mttr_min"], 0.5)
+                rep = self.lognormal(self.P["mttr_min"], 0.5, self.R("repair", S["id"]))
                 self.stop(S, "down", rep)
                 S["failures"] += 1
                 self.log.append(dict(t=self.t, time=str(self.clock()), event="breakdown", station=S["id"], repair_min=round(rep, 1)))
@@ -243,7 +268,7 @@ class LineSim:
         if S["down_until"] > self.t + 1e-9:
             return
         S["down_time" if state == "down" else "maint_time"] += minutes
-        S["state"], S["haz"], S["haz_E"], S["degraded"], S["drift"] = "up", 0.0, self.rng.exponential(), False, 1.0
+        S["state"], S["haz"], S["haz_E"], S["degraded"], S["drift"] = "up", 0.0, self.R("fail", sid).exponential(), False, 1.0
         self.log.append(dict(t=self.t, time=str(self.clock()), event="repaired" if state == "down" else "maintained", station=sid))
         if not S["busy"]:
             self.start(sid)
@@ -263,8 +288,8 @@ class LineSim:
             S["util_window"] = busy
             prog = max(0.0, (S["haz"] - (S["haz_E"] - self.P["precursor_h"] / self.P["mtbf_h"])) / (self.P["precursor_h"] / self.P["mtbf_h"])) if S["degraded"] else 0.0
             on = S["state"] == "up"
-            S["sensors"]["motor_temp"].append((self.t, round(hall + (14 * util if on else 0) + 9 * prog + self.rng.normal(0, 0.8), 2)))
-            S["sensors"]["vibration"].append((self.t, round((0.9 + 0.6 * util if on else 0.05) + 1.4 * prog + self.rng.normal(0, 0.08), 3)))
+            S["sensors"]["motor_temp"].append((self.t, round(hall + (14 * util if on else 0) + 9 * prog + self.R("sensor").normal(0, 0.8), 2)))
+            S["sensors"]["vibration"].append((self.t, round((0.9 + 0.6 * util if on else 0.05) + 1.4 * prog + self.R("sensor").normal(0, 0.08), 3)))
             S["sensors"]["queue"].append((self.t, len(S["queue"])))
             S["sensors"]["status"].append((self.t, S["state"]))
         self.push(self.t + dt, "sensor", None)
@@ -351,7 +376,7 @@ class LineSim:
         runs = []
         for r in range(reps):
             sim = copy.deepcopy(self)
-            sim.rng = np.random.default_rng([int(self.t * 1000), seed_offset + r])
+            sim.reseed([int(self.t * 1000), seed_offset + r])
             t_start, base = sim.t, sim.counters()
             sim.apply(actions)
             sim.run(hours * 60.0)

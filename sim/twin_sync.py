@@ -132,7 +132,7 @@ class TwinModel:
             S["haz_E"] = float(rng.exponential())
             if s in self.p_fail and rng.random() < self.p_fail[s]:
                 S["degraded"], S["haz"] = True, max(0.0, S["haz_E"] - float(rng.uniform()) * win)
-        sim.rng = np.random.default_rng(self.seed + [int(r), 1])
+        sim.reseed(self.seed + [int(r), 1])
         return sim
 
     def run(self, actions, r, hours):

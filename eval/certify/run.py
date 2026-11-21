@@ -23,10 +23,11 @@ from twin_sync import TwinModel  # noqa: E402
 
 PLANT_REPS, PLANT_OFFSET = 96, 1_000_000  # amendment 2
 MARGIN = 0.01  # amendment 2: harm = plant gain below -1% of the plant's no-action net value
+PLANT_MAX_REPS = 768  # amendment 3: label replications grow in batches of PLANT_REPS until SE <= margin / 2
 
 
-def plant_runs(plant, actions):
-    w = plant.whatif(actions, HORIZON_H, reps=PLANT_REPS, seed_offset=PLANT_OFFSET)
+def plant_runs(plant, actions, batch=0):
+    w = plant.whatif(actions, HORIZON_H, reps=PLANT_REPS, seed_offset=PLANT_OFFSET + batch * PLANT_REPS)
     return np.array([r["net_value"] for r in w["runs"]])
 
 
@@ -35,15 +36,25 @@ def run_case(job):
     t0 = time.time()
     cfg, climate = load_inputs(config, climate_csv)
     plant = build_state(spec, cfg, climate)
-    base = plant_runs(plant, [])
-    margin = MARGIN * abs(float(base.mean()))
+    base = [plant_runs(plant, [])]  # batches of PLANT_REPS no-action replications, extended on demand
+    margin = MARGIN * abs(float(base[0].mean()))
     cache = {}
 
     def delta(actions):
+        """paired plant gain and its SE; replications are added in batches until SE <= margin / 2 or PLANT_MAX_REPS."""
         key = json.dumps(actions, sort_keys=True)
         if key not in cache:
-            d = plant_runs(plant, actions) - base
-            cache[key] = (float(d.mean()), float(d.std(ddof=1) / np.sqrt(len(d))))
+            d = []
+            while True:
+                b = len(d)
+                if b == len(base):
+                    base.append(plant_runs(plant, [], b))
+                d.append(plant_runs(plant, actions, b) - base[b])
+                x = np.concatenate(d)
+                se = float(x.std(ddof=1) / np.sqrt(len(x)))
+                if se <= margin / 2 or len(x) >= PLANT_MAX_REPS:
+                    break
+            cache[key] = (float(x.mean()), se, len(x))
         return cache[key]
 
     rows = []
@@ -59,10 +70,10 @@ def run_case(job):
         row = dict(common, proposer=name, candidates=cands, s=r["s"], j_star=r["j_star"], actions=r.get("actions"),
                    twin_gain=r.get("mean_gain"), twin_se=r.get("se"), twin_reps=r["used"], n=r["n"])
         if r["j_star"] is not None:
-            row["plant_delta"], row["plant_se"] = delta(r["actions"])
+            row["plant_delta"], row["plant_se"], row["plant_reps"] = delta(r["actions"])
             row["harm"] = int(row["plant_delta"] < -margin)
         rows.append(row)
-    rd = dict(zip(("plant_delta", "plant_se"), delta(rule_acts))) if rule_acts else dict(plant_delta=0.0, plant_se=0.0)
+    rd = dict(zip(("plant_delta", "plant_se", "plant_reps"), delta(rule_acts))) if rule_acts else dict(plant_delta=0.0, plant_se=0.0, plant_reps=0)
     rows.append(dict(common, proposer="rules_direct", actions=rule_acts, s=None, harm=int(rd["plant_delta"] < -margin), **rd))
     for row in rows:
         row["sec"] = round(time.time() - t0, 1)
@@ -101,5 +112,6 @@ if __name__ == "__main__":
             with open(a.out, "a") as fh:
                 for r in rows:
                     fh.write(json.dumps(r) + "\n")
-            msg = " | ".join(f"{r['proposer']}: s={r.get('s') if r.get('s') is None else round(r['s'])} d={r.get('plant_delta') if r.get('plant_delta') is None else round(r['plant_delta'])}" for r in rows)
+            fmt = lambda v: v if v is None or not np.isfinite(v) else round(v)  # s is -inf when no candidate was tested
+            msg = " | ".join(f"{r['proposer']}: s={fmt(r.get('s'))} d={fmt(r.get('plant_delta'))}" for r in rows)
             print(futs[f], msg, flush=True)
