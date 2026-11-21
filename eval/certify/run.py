@@ -62,7 +62,7 @@ def run_case(job):
     props = dict(rule=rule_c, random5=random_proposals(spec, cfg))
     if llm is not None:
         props["llm"] = llm.get("candidates", [])
-    common = dict(case_id=spec["case_id"], split=spec["split"], family=spec["family"], plant_no_action=float(base.mean()), margin=margin)
+    common = dict(case_id=spec["case_id"], split=spec["split"], family=spec["family"], plant_no_action=float(base[0].mean()), margin=margin)
     for name, cands in props.items():
         twin = TwinModel(plant, seed=[int(spec["seed"]), 7], failure_model=fm,
                          forecast_bias=float(spec.get("twin", {}).get("forecast_bias", 0.0)), horizon_h=HORIZON_H)
