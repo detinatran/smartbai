@@ -1,11 +1,13 @@
-"""Learn-then-Test gate (CERTIFY_PROTOCOL.md, Method step 5, and amendment 1 on screening)."""
+"""Learn-then-Test gate (CERTIFY_PROTOCOL.md, Method step 5, amendment 1 on screening, amendment 4 on the test order)."""
 import math
 
 import numpy as np
 from scipy.stats import binom
 
 ALPHA, DELTA = 0.10, 0.10
-GRID = np.arange(3000.0, -1000.0 - 1e-9, -50.0)  # most conservative first
+GRID = np.arange(3000.0, -1000.0 - 1e-9, -50.0)  # amendments 1-3 (v1, v2): most conservative first
+GRID_A4 = np.arange(0.0, -1000.0 - 1e-9, -50.0)  # amendment 4: from tau = 0 (the per-case twin bound) downwards
+GRIDS = dict(a2=GRID, a4=GRID_A4)
 
 
 def n_min(alpha=ALPHA, delta=DELTA):

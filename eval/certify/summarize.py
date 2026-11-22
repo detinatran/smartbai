@@ -1,6 +1,7 @@
 """Calibrate the gate on the calibration split and report the test split (CERTIFY_PROTOCOL.md: conditions, H1-H4, secondary).
 usage: summarize.py --calibration CAL.jsonl [CAL_LLM.jsonl ...] --test TEST.jsonl [TEST_LLM.jsonl ...]
-       summarize.py --dev DEV.jsonl     (descriptive only: tau chosen on the dev split itself)"""
+       summarize.py --dev DEV.jsonl     (descriptive only: tau chosen on the dev split itself)
+       --ltt a2 reproduces v1 and v2 (amendments 1-3); the default a4 is the test order of amendment 4."""
 import argparse
 import json
 import math
@@ -12,7 +13,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ltt import ALPHA, DELTA, ltt_threshold  # noqa: E402
+from ltt import ALPHA, DELTA, GRIDS, ltt_threshold  # noqa: E402
 
 
 def load(files):
@@ -99,18 +100,19 @@ def main():
     ap.add_argument("--calibration", nargs="*")
     ap.add_argument("--test", nargs="*")
     ap.add_argument("--dev", nargs="*")
+    ap.add_argument("--ltt", choices=sorted(GRIDS), default="a4", help="test order of the LTT grid: a2 (v1, v2) or a4 (amendment 4)")
     a = ap.parse_args()
     cal = load(a.dev or a.calibration)
     test = load(a.dev or a.test)
     label = "DEV (descriptive; tau chosen on the same cases)" if a.dev else "TEST"
     taus = {}
-    print(f"== calibration (alpha={ALPHA}, delta={DELTA})")
+    print(f"== calibration (alpha={ALPHA}, delta={DELTA}, LTT order {a.ltt}: {GRIDS[a.ltt][0]:g} to {GRIDS[a.ltt][-1]:g})")
     for p in ("llm", "rule", "random5"):
         rs = by_proposer(cal, p)
         if rs:
             s = [r["s"] if r.get("j_star") is not None else -math.inf for r in rs]
             h = [r.get("harm", 0) for r in rs]
-            taus[p], trace = ltt_threshold(s, h)
+            taus[p], trace = ltt_threshold(s, h, grid=GRIDS[a.ltt])
             last = [t for t in trace if t["status"] != "screened"][-1:] if trace else []
             print(f"{p:8s} tau={taus[p]}  cases={len(rs)}  harm rate if all executed={np.mean([x for x, r in zip(h, rs) if r.get('j_star') is not None]):.3f}  last test={last}")
     cond = conditions(test, taus)

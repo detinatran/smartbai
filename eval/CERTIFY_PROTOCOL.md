@@ -256,3 +256,50 @@ Changes:
 Unchanged: the method (K, n0, round size, B, elimination rule, score, τ grid, α = δ = 0.10, LTT screening), the plant
 factor range, the observation noise, the hidden-state sampling, the harm definition and margin, the conditions, and
 the hypotheses with their tests. v2 is run once: calibration, then test.
+
+## Result of the protocol as amended up to amendment 3 (v2, 2026-11-22)
+Dev, calibration and test splits were run once each (rule and random-5 proposers; no LLM proposals). No case failed
+after the retry rule of `run.py`. Plant labels: median 96 replications (max 768); median SE(Δ_plant)/m 0.08 (rule) and
+0.11 (random-5) on the calibration split.
+- **Calibration:** τ = None for both proposers. Rule: the first threshold with at least n_min executed cases was
+  τ = 400 (22 cases, 1 harm, p = 0.34 > δ), so fixed-sequence testing stopped there. Random-5: τ = 0 (38 cases,
+  2 harms, p = 0.25). Harm rate if every tested j* is executed: rule 0.034, random-5 0.081.
+- **Test (confirmatory, Rule-Certify in place of LLM-Certify):** Certify abstained on 210 of 210 cases.
+  H1: not refuted (no executed decision). H2: rule-naive harm 3/128 = 0.023 (CP 95% 0.005–0.067), p = 0.9998, Holm 1,
+  not supported; the per-case twin bound alone kept the harm rate below α. H3: G = 0, not supported. H4: dropped.
+- **Secondary (test):** rules executed directly: coverage 0.99, harm 16/207 = 0.077, mean G 468 (bootstrap 95%
+  143–795). Rule-ungated: harm 10/207 = 0.048, mean G 494. Rule-naive: coverage 0.61, harm 0.023, mean G 421.
+  Random5-ungated: harm 28/210 = 0.133, mean G 137 (−108–348). Random5-naive: coverage 0.23, harm 0.082, mean G 73.
+  Risk is still highest among the cases with the largest scores (rule: harm 0.08 above τ = 500, 0.02 above τ = 0;
+  random-5: 0.29–0.33 above τ ≥ 250), and roughly flat at 0.02–0.04 (rule) from τ = 0 downwards.
+- **Reading:** amendment 3 repaired the twin and the labels; the remaining failure is the test order of the gate.
+  Testing from the most conservative threshold first meets the high-score cases, where risk is highest and the
+  threshold sets are smallest, before any well-populated threshold, and a single harm among the first 22 cases stops
+  the sequence.
+- **Exploratory (not confirmatory; the order was chosen after seeing this result):** with the order of amendment 4
+  (from τ = 0 downwards), the v2 calibration split certifies τ = −1000 for rule (191 cases, 2 harms, p = 4·10⁻⁷) and
+  none for random-5. On the v2 test split Rule-Certify would then execute 193 of 210 cases with 7 harms (0.036, CP 95%
+  upper 0.073) and mean G 576 (Wilcoxon p = 4·10⁻²²). `summarize.py --ltt a2` reproduces the confirmatory v2 result;
+  `--ltt a4` gives this exploratory one.
+
+## Amendment 4 (2026-11-22, after the v2 result, before any v4 calibration or test case is run)
+Motivation: the v2 result above. The gate's fixed-sequence test order started at τ = 3000, among the highest twin
+scores, where the plant risk is highest (winner's curse of the selection over K candidates) and few cases are
+selected. The order was data-independent and valid, but it could not certify any threshold once one of the first
+well-populated thresholds held a single harm.
+
+Changes:
+1. **LTT test order** (`eval/certify/ltt.py`, `GRID_A4`): fixed-sequence testing over τ = 0, −50, …, −1000, in this
+   order, with the same exact binomial p-values, the same screening of thresholds with fewer than n_min = 22 executed
+   cases, and the same stopping rule; τ is the last certified threshold, or None (always abstain). τ = 0 is the
+   per-case twin bound (LLM-naive / Rule-naive), so Certify tests that bound first and only relaxes it while the
+   calibration harm rate stays certifiably below α. The order is fixed before any v4 case is run and does not depend
+   on data; family-wise error control at δ is as in amendment 1. Thresholds above 0 are no longer tested.
+2. **Fresh splits** (`eval/scenarios_certify.py --version v4`): calibration seeds 80000+ and test seeds 90000+
+   (35 cases per family each, same generator). The dev split (20000+) is unchanged and is not run again.
+
+Unchanged: the simulator, twin and random streams of amendment 3, the degradation model fitted for v2 (reused as is),
+the plant label rule and margin, K, n0, round size, B, the elimination rule and score, α = δ = 0.10, n_min, the
+conditions, and the hypotheses with their tests and Holm family. Rule-Certify stands in for LLM-Certify and H4 is
+dropped unless LLM proposals frozen by `FROZEN.md` exist before the v4 calibration split is run. v4 is run once:
+calibration, then test; the v4 result is reported whatever it is, alongside v1 and v2.
