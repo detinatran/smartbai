@@ -338,3 +338,49 @@ Calibration and test splits were run once each (rule and random-5 proposers; no 
   (coverage 0.96), so the gate adds little to twin testing alone, and among the conditions only the per-case twin
   bound (τ = 0) had a mean gain whose interval excludes 0. The guarantee is marginal over the case distribution, not
   per family: on rush cases the harm rate of Rule-Certify was 0.25.
+
+## Amendment 5 (2026-11-22, after the v4 result, before any v5 calibration or test case is run)
+Motivation: the v4 result above. The gate's guarantee is marginal over the case distribution. On v4 the pooled gate
+certified τ = −1000, executed 96% of the cases, and on rush cases its harm rate was 0.25. A planner needs the bound
+for the kind of situation it is in, not on average over situations.
+
+Planning used only data already reported (v2 and v4 calibration and test cases). One gate per family fitted on the v4
+calibration split and applied to the v4 test split abstained on breakdown and rush cases. On the other four families
+it executed 138 of 140 cases with 1 harm, and its mean G was 146 with a bootstrap 95% interval of 113 to 186. With 35
+calibration cases per family, a family can be certified only with 0 or 1 harms among its executed cases. With 100
+cases and a harm rate of 0.04, a threshold at τ = 0 is certified with probability about 0.8. These numbers are
+exploratory; they set the method and the sample size below and are not part of the v5 result.
+
+Changes:
+1. **One gate per family** (`eval/certify/ltt.py`, `ltt_by_family`; `summarize.py --gate family`, the new default).
+   For each proposer and each family f, τ_f is chosen by the LTT procedure of amendment 4 (test order τ = 0, −50, …,
+   −1000, exact binomial p-values, n_min = 22, the same stopping rule) on the calibration cases of family f only.
+   A test case of family f is executed if s > τ_f; with τ_f = None every case of family f abstains.
+   - **Guarantee:** for each family separately, P(R_f > α) ≤ δ over the calibration draw, with α = δ = 0.10. It is
+     not simultaneous over the six families. The simultaneous version (δ/6 per family) is reported as secondary.
+   - **Family is known at decision time.** The family is the event that prompts the decision: a drift or degradation
+     alarm, a breakdown, a heat forecast, a rush order, or a routine check with none of these. In a plant it is read
+     from the alarm or order system, not inferred by Certify.
+2. **Fresh splits, larger** (`eval/scenarios_certify.py --version v5`): calibration 100 cases per family (600, seeds
+   110000+), test 50 cases per family (300, seeds 120000+), same generator. The dev split is unchanged and is not run
+   again.
+3. **Hypotheses** (test split; Rule-Certify-F, the per-family gate of the rule proposer, stands in for LLM-Certify;
+   H4 is dropped):
+   - **H1, validity per family (falsification check).** For each family with at least one executed test case, exact
+     one-sided binomial test of H0: R_f ≤ 0.10 against R_f > 0.10. Holm over those families at 0.05. The guarantee is
+     refuted if any adjusted p is below 0.05. The pooled harm rate and the CP 95% upper bound of each family are
+     reported.
+   - **H2, a pooled gate is not enough.** Under the pooled gate of amendment 4 (one τ per proposer, fitted on the
+     whole v5 calibration split) some family has R_f > α. Test: exact one-sided binomial test per family, combined
+     by Bonferroni (p = 6 · min p_f, capped at 1, over the families with executed cases).
+   - **H3, the gate keeps value.** G of Rule-Certify-F is greater than 0. Wilcoxon signed-rank, one-sided,
+     zero_method = "wilcox".
+   - H2 and H3 form one Holm family at 0.05.
+
+Unchanged: the simulator, twin and random streams of amendment 3; the degradation model fitted for v2, reused as is;
+the plant label rule and margin; K, n0, round size, B, the elimination rule and score; α, δ, n_min; the LTT test
+order of amendment 4; the proposers and the conditions. Secondary conditions add the pooled gate and the
+simultaneous per-family gate; the per-family table adds the naive conditions.
+
+v5 is run once, calibration then test. The v5 result is reported whatever it is, alongside v1, v2 and v4.
+`summarize.py --gate pooled` with the matching `--ltt` reproduces the v1, v2 and v4 summaries.

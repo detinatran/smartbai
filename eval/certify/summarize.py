@@ -1,7 +1,9 @@
 """Calibrate the gate on the calibration split and report the test split (CERTIFY_PROTOCOL.md: conditions, H1-H4, secondary).
 usage: summarize.py --calibration CAL.jsonl [CAL_LLM.jsonl ...] --test TEST.jsonl [TEST_LLM.jsonl ...]
        summarize.py --dev DEV.jsonl     (descriptive only: tau chosen on the dev split itself)
-       --ltt a2 reproduces v1 and v2 (amendments 1-3); the default a4 is the test order of amendment 4."""
+       --ltt a2 reproduces v1 and v2 (amendments 1-3); the default a4 is the test order of amendment 4.
+       --gate pooled: one threshold per proposer (amendments 1-4, reproduces v1, v2, v4 with the matching --ltt);
+       the default --gate family is amendment 5: one threshold per proposer and family, with its hypotheses."""
 import argparse
 import json
 import math
@@ -13,7 +15,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ltt import ALPHA, DELTA, GRIDS, ltt_threshold  # noqa: E402
+from ltt import ALPHA, DELTA, GRIDS, ltt_by_family, ltt_threshold  # noqa: E402
 
 
 def load(files):
@@ -30,10 +32,12 @@ def by_proposer(rows, p):
 
 
 def gate(rows, tau):
-    """per case: executed?, plant gain G (0 when abstaining), harm (only when executed)."""
+    """per case: executed?, plant gain G (0 when abstaining), harm (only when executed).
+    tau: one threshold, None (always abstain), or {family: threshold or None} (amendment 5)."""
     out = []
     for r in rows:
-        ex = r.get("j_star") is not None and tau is not None and r["s"] > tau
+        t = tau.get(r["family"]) if isinstance(tau, dict) else tau
+        ex = r.get("j_star") is not None and t is not None and r["s"] > t
         out.append(dict(case_id=r["case_id"], family=r["family"], executed=ex, G=r["plant_delta"] if ex else 0.0,
                         harm=r.get("harm", 0) if ex else None))
     return out
@@ -63,7 +67,7 @@ def describe(name, g):
                 mean_G=round(m, 1), G_ci=(round(blo, 1), round(bhi, 1)))
 
 
-def conditions(rows, taus):
+def conditions(rows, taus, extra=None):
     out = {"no_action": [dict(case_id=r["case_id"], family=r["family"], executed=False, G=0.0, harm=None) for r in by_proposer(rows, "rules_direct")]}
     out["rules"] = [dict(case_id=r["case_id"], family=r["family"], executed=bool(r["actions"]), G=r["plant_delta"],
                          harm=r["harm"] if r["actions"] else None) for r in by_proposer(rows, "rules_direct")]
@@ -74,6 +78,9 @@ def conditions(rows, taus):
         out[f"{p}-ungated"] = gate(rs, -math.inf)
         out[f"{p}-naive"] = gate(rs, 0.0)
         out[f"{p}-certify"] = gate(rs, taus.get(p))
+        for name, tx in (extra or {}).items():  # secondary gates (amendment 5: pooled, simultaneous)
+            if p in tx:
+                out[f"{p}-certify-{name}"] = gate(rs, tx[p])
     return out
 
 
@@ -95,46 +102,89 @@ def holm(pvals):
     return adj
 
 
+def binom_greater(ex):
+    k = sum(x["harm"] for x in ex)
+    return (binomtest(k, len(ex), ALPHA, alternative="greater").pvalue if ex else math.nan), k, len(ex)
+
+
+def per_family_validity(g):
+    """amendment 5: exact one-sided binomial test of R_f <= alpha per family with executed cases, Holm over them."""
+    pv, cells = {}, {}
+    for f in sorted({x["family"] for x in g}):
+        p, k, n = binom_greater([x for x in g if x["family"] == f and x["executed"]])
+        cells[f] = (k, n)
+        if n:
+            pv[f] = p
+    return pv, (holm(pv) if pv else {}), cells
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--calibration", nargs="*")
     ap.add_argument("--test", nargs="*")
     ap.add_argument("--dev", nargs="*")
-    ap.add_argument("--ltt", choices=sorted(GRIDS), default="a4", help="test order of the LTT grid: a2 (v1, v2) or a4 (amendment 4)")
+    ap.add_argument("--ltt", choices=sorted(GRIDS), default="a4", help="test order of the LTT grid: a2 (v1, v2) or a4 (amendments 4-5)")
+    ap.add_argument("--gate", choices=["family", "pooled"], default="family", help="one threshold per family (amendment 5) or one per proposer (amendments 1-4)")
     a = ap.parse_args()
     cal = load(a.dev or a.calibration)
     test = load(a.dev or a.test)
     label = "DEV (descriptive; tau chosen on the same cases)" if a.dev else "TEST"
-    taus = {}
-    print(f"== calibration (alpha={ALPHA}, delta={DELTA}, LTT order {a.ltt}: {GRIDS[a.ltt][0]:g} to {GRIDS[a.ltt][-1]:g})")
+    grid = GRIDS[a.ltt]
+    pooled, fam, simul = {}, {}, {}
+    print(f"== calibration (alpha={ALPHA}, delta={DELTA}, LTT order {a.ltt}: {grid[0]:g} to {grid[-1]:g}, gate {a.gate})")
     for p in ("llm", "rule", "random5"):
         rs = by_proposer(cal, p)
-        if rs:
-            s = [r["s"] if r.get("j_star") is not None else -math.inf for r in rs]
-            h = [r.get("harm", 0) for r in rs]
-            taus[p], trace = ltt_threshold(s, h, grid=GRIDS[a.ltt])
-            last = [t for t in trace if t["status"] != "screened"][-1:] if trace else []
-            print(f"{p:8s} tau={taus[p]}  cases={len(rs)}  harm rate if all executed={np.mean([x for x, r in zip(h, rs) if r.get('j_star') is not None]):.3f}  last test={last}")
-    cond = conditions(test, taus)
+        if not rs:
+            continue
+        s = [r["s"] if r.get("j_star") is not None else -math.inf for r in rs]
+        h = [r.get("harm", 0) for r in rs]
+        f = [r["family"] for r in rs]
+        pooled[p], trace = ltt_threshold(s, h, grid=grid)
+        last = [t for t in trace if t["status"] != "screened"][-1:] if trace else []
+        print(f"{p:8s} pooled tau={pooled[p]}  cases={len(rs)}  harm rate if all executed={np.mean([x for x, r in zip(h, rs) if r.get('j_star') is not None]):.3f}  last test={last}")
+        if a.gate == "family":
+            fam[p], traces = ltt_by_family(s, h, f, grid=grid)
+            simul[p], _ = ltt_by_family(s, h, f, delta=DELTA / len(fam[p]), grid=grid)
+            for fm in fam[p]:
+                tr = [t for t in traces[fm] if t["status"] != "screened"]
+                first = tr[0] if tr else None
+                print(f"   {fm:12s} tau={fam[p][fm]}  (delta/{len(fam[p])}: {simul[p][fm]})  first test={first}  last test={tr[-1] if tr else None}")
+    if a.gate == "family":
+        cond = conditions(test, fam, extra=dict(pooled=pooled, simul=simul))
+    else:
+        cond = conditions(test, pooled)
     print(f"\n== {label}: conditions")
     for name, g in cond.items():
         print(describe(name, g))
-    main_p = "llm" if f"llm-certify" in cond else "rule"
-    print(f"\n== hypotheses ({'LLM' if main_p == 'llm' else 'Rule-Certify in place of LLM (no LLM proposals)'})")
+    main_p = "llm" if "llm-certify" in cond else "rule"
+    print(f"\n== hypotheses ({'LLM' if main_p == 'llm' else 'Rule-Certify in place of LLM (no LLM proposals)'}; gate {a.gate})")
     cert, naive = cond[f"{main_p}-certify"], cond[f"{main_p}-naive"]
     ex_c, ex_n = [x for x in cert if x["executed"]], [x for x in naive if x["executed"]]
-    k_c, k_n = sum(x["harm"] for x in ex_c), sum(x["harm"] for x in ex_n)
-    p1 = binomtest(k_c, len(ex_c), ALPHA, alternative="greater").pvalue if ex_c else math.nan
-    print(f"H1 validity: harms {k_c}/{len(ex_c)}, CP 95% upper {cp(k_c, len(ex_c))[1]:.3f}, p(R>alpha) = {p1:.4f} -> {'REFUTED' if p1 < 0.05 else 'not refuted'}")
+    p1, k_c, n_c = binom_greater(ex_c)
     pv = {}
-    pv["H2"] = binomtest(k_n, len(ex_n), ALPHA, alternative="greater").pvalue if ex_n else 1.0
+    if a.gate == "family":
+        print(f"pooled over families: harms {k_c}/{n_c}, CP 95% upper {cp(k_c, n_c)[1]:.3f}, p(R>alpha) = {p1:.4f}")
+        fp, fadj, cells = per_family_validity(cert)
+        for f, (k, n) in cells.items():
+            extra_s = f", p = {fp[f]:.4f}, Holm {fadj[f]:.4f}" if f in fp else ""
+            print(f"  H1 {f:12s} harms {k}/{n}, CP 95% upper {cp(k, n)[1]:.3f}{extra_s}")
+        refuted = any(v < 0.05 for v in fadj.values())
+        print(f"H1 validity per family -> {'REFUTED' if refuted else 'not refuted'}")
+        pp, padj, pcells = per_family_validity(cond[f"{main_p}-certify-pooled"])
+        for f, (k, n) in pcells.items():
+            print(f"  H2 pooled gate {f:12s} harms {k}/{n}" + (f", p = {pp[f]:.4f}" if f in pp else ""))
+        pv["H2"] = min(1.0, len(pp) * min(pp.values())) if pp else 1.0  # Bonferroni over families: some family has R_f > alpha
+    else:
+        print(f"H1 validity: harms {k_c}/{n_c}, CP 95% upper {cp(k_c, n_c)[1]:.3f}, p(R>alpha) = {p1:.4f} -> {'REFUTED' if p1 < 0.05 else 'not refuted'}")
+        k_n = sum(x["harm"] for x in ex_n)
+        pv["H2"] = binomtest(k_n, len(ex_n), ALPHA, alternative="greater").pvalue if ex_n else 1.0
+        print(f"H2 naive harm {k_n}/{len(ex_n)} = {k_n / max(len(ex_n), 1):.3f}")
     G = np.array([x["G"] for x in cert])
     pv["H3"] = wilcoxon(G, zero_method="wilcox", alternative="greater").pvalue if (G != 0).any() else 1.0
     if main_p == "llm" and "random5-certify" in cond:
         d = G - np.array([x["G"] for x in cond["random5-certify"]])
         pv["H4"] = wilcoxon(d, zero_method="wilcox", alternative="greater").pvalue if (d != 0).any() else 1.0
     adj = holm(pv)
-    print(f"H2 naive harm {k_n}/{len(ex_n)} = {k_n / max(len(ex_n), 1):.3f}")
     print(f"H3 certify mean G {G.mean():.1f}")
     for k in pv:
         print(f"{k}: p = {pv[k]:.4g}, Holm-adjusted = {adj[k]:.4g} -> {'supported' if adj[k] < 0.05 else 'not supported'}")
@@ -145,15 +195,15 @@ def main():
             print(p)
             for line in risk_coverage(rs):
                 print("  " + line)
-    print("\n== per family (coverage / harm rate / mean G)")
+    print("\n== per family (executed/cases, harms, mean G)")
     fams = sorted({x["family"] for x in cert})
-    for name in [n for n in cond if n.endswith("certify") or n in ("rules", "no_action")]:
+    for name in [n for n in cond if "certify" in n or n.endswith("naive") or n in ("rules", "no_action")]:
         cells = []
         for f in fams:
             g = [x for x in cond[name] if x["family"] == f]
             ex = [x for x in g if x["executed"]]
             cells.append(f"{f}: {len(ex)}/{len(g)}, {sum(x['harm'] for x in ex)}, {np.mean([x['G'] for x in g]):.0f}")
-        print(f"{name:16s} " + " | ".join(cells))
+        print(f"{name:22s} " + " | ".join(cells))
 
 
 if __name__ == "__main__":

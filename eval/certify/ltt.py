@@ -1,4 +1,5 @@
-"""Learn-then-Test gate (CERTIFY_PROTOCOL.md, Method step 5, amendment 1 on screening, amendment 4 on the test order)."""
+"""Learn-then-Test gate (CERTIFY_PROTOCOL.md, Method step 5, amendment 1 on screening, amendment 4 on the test order,
+amendment 5 on one gate per family)."""
 import math
 
 import numpy as np
@@ -35,3 +36,14 @@ def ltt_threshold(scores, harms, alpha=ALPHA, delta=DELTA, grid=GRID):
         tau = float(t)
         trace.append(dict(tau=float(t), N=N, K=K, p=p, status="certified"))
     return tau, trace
+
+
+def ltt_by_family(scores, harms, families, alpha=ALPHA, delta=DELTA, grid=GRID_A4):
+    """amendment 5: one LTT threshold per family, each from that family's calibration cases only, at level delta per
+    family. Returns ({family: tau}, {family: trace})."""
+    s, h, f = np.asarray(scores, float), np.asarray(harms, float), np.asarray(families)
+    taus, traces = {}, {}
+    for fam in sorted(set(f.tolist())):
+        m = f == fam
+        taus[fam], traces[fam] = ltt_threshold(s[m], h[m], alpha, delta, grid)
+    return taus, traces

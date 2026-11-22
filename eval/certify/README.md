@@ -14,13 +14,13 @@ The twin differs from the plant in two ways:
 
 | File | Role |
 |---|---|
-| [`../scenarios_certify.py`](../scenarios_certify.py) | 456 cases: dev 36, calibration 210, test 210; six families, including "quiet" |
+| [`../scenarios_certify.py`](../scenarios_certify.py) | cases per split (`--version`; v5: dev 36, calibration 600, test 300); six families, including "quiet" |
 | [`../../sim/fit_failure_model.py`](../../sim/fit_failure_model.py) | the twin's degradation model, fitted on nominal simulations |
 | [`proposers.py`](proposers.py) | rule and random-5 proposers; CLI that collects LLM proposals through the tool server |
 | [`rs.py`](rs.py) | sequential paired comparison against no action, in the twin |
-| [`ltt.py`](ltt.py) | Learn-then-Test threshold |
+| [`ltt.py`](ltt.py) | Learn-then-Test threshold, pooled or one per family (amendment 5) |
 | [`run.py`](run.py) | runs a split: twin testing per proposer, plant harm labels, the rule agent executed directly |
-| [`summarize.py`](summarize.py) | calibrates τ, reports the conditions, tests H1–H4 |
+| [`summarize.py`](summarize.py) | calibrates τ (`--gate family` by default, `--gate pooled` for v1–v4), reports the conditions, tests the hypotheses |
 
 ## Running
 
