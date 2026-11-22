@@ -303,3 +303,38 @@ the plant label rule and margin, K, n0, round size, B, the elimination rule and 
 conditions, and the hypotheses with their tests and Holm family. Rule-Certify stands in for LLM-Certify and H4 is
 dropped unless LLM proposals frozen by `FROZEN.md` exist before the v4 calibration split is run. v4 is run once:
 calibration, then test; the v4 result is reported whatever it is, alongside v1 and v2.
+
+## Result of the protocol as amended up to amendment 4 (v4, 2026-11-22)
+Calibration and test splits were run once each (rule and random-5 proposers; no LLM proposals). No case failed.
+`summarize.py` (default `--ltt a4`) gives the numbers below.
+- **Calibration:** rule τ = −1000. The first tested threshold, τ = 0, had 130 executed cases with 8 harms
+  (p = 0.088 ≤ δ); the sequence continued to τ = −1000 (193 cases, 9 harms, p = 0.005). Random-5: τ = None (τ = 0:
+  42 cases, 2 harms, p = 0.20), so Random5-Certify abstained on every test case. Harm rate if every tested j* is
+  executed: rule 0.083, random-5 0.110.
+- **Test (confirmatory, Rule-Certify in place of LLM-Certify):** Rule-Certify executed 201 of 210 cases with 10 harms.
+  - H1: harm rate 0.050, CP 95% upper bound 0.090, p(R > α) = 0.997; not refuted.
+  - H2: rule-naive harm 5/140 = 0.036, p = 0.999, Holm 0.999; not supported (as in v2, the per-case twin bound alone
+    kept the harm rate below α).
+  - H3: Wilcoxon p = 3.6·10⁻¹⁹, Holm 7.3·10⁻¹⁹; supported.
+  - H4: dropped.
+- **Mean gain:** the mean plant gain of Rule-Certify is 145, but its bootstrap 95% interval (−69, 303) includes 0.
+  The signed-rank test of H3 responds to the many small positive gains; the mean is pulled down by the rush family,
+  where Rule-Certify executed 28 of 35 cases with 7 harms (0.25) and a mean gain of −506.
+- **Secondary (test):**
+
+  | Condition | Coverage | Harm rate (CP 95%) | Mean G (bootstrap 95%) |
+  |---|---|---|---|
+  | Rules executed directly | 0.995 | 0.086 (0.052–0.133) | 258 (−45, 553) |
+  | Rule-ungated | 0.995 | 0.057 (0.030–0.098) | 165 (−58, 349) |
+  | Rule-naive (τ = 0) | 0.667 | 0.036 (0.012–0.081) | 159 (22, 260) |
+  | Rule-Certify (τ = −1000) | 0.957 | 0.050 (0.024–0.090) | 145 (−69, 303) |
+  | Random5-ungated | 1.000 | 0.095 (0.059–0.143) | 136 (−9, 329) |
+  | Random5-naive | 0.233 | 0.061 (0.013–0.169) | 28 (−4, 65) |
+
+  Risk is again highest among the largest scores (rule: harm 0.15–0.33 above τ ≥ 250, 0.04 from τ = 0 downwards).
+  Per family, Rule-Certify had 0–2 harms in each of the five non-rush families.
+- **Reading:** with the test order of amendment 4 the gate certifies a threshold, its harm rate on the test split stays
+  below α, and H3 is supported. Two qualifications: the certified threshold executes almost every case
+  (coverage 0.96), so the gate adds little to twin testing alone, and among the conditions only the per-case twin
+  bound (τ = 0) had a mean gain whose interval excludes 0. The guarantee is marginal over the case distribution, not
+  per family: on rush cases the harm rate of Rule-Certify was 0.25.
