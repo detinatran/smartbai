@@ -100,18 +100,21 @@ if __name__ == "__main__":
     ap.add_argument("--cases", required=True)
     ap.add_argument("--split", required=True, choices=["dev", "calibration", "test"])
     ap.add_argument("--out", required=True)
+    ap.add_argument("--shard", type=int, default=0, help="run only cases with index %% nshards == shard (parallel servers)")
+    ap.add_argument("--nshards", type=int, default=1)
     a = ap.parse_args()
     mod, fn = a.agent.split(":")
     agent = getattr(importlib.import_module(mod), fn)
     client = ToolClient(a.server)
     done = {json.loads(l)["case_id"] for l in open(a.out)} if os.path.exists(a.out) else set()
-    for spec in json.load(open(a.cases))["cases"]:
-        if spec["split"] != a.split or spec["case_id"] in done:
+    specs = [c for c in json.load(open(a.cases))["cases"] if c["split"] == a.split]
+    for i, spec in enumerate(specs):
+        if i % a.nshards != a.shard or spec["case_id"] in done:
             continue
         client.admin("reset", dict(spec, disabled_tools=READ_ONLY))
-        err = None
+        err, trace = None, None
         try:
-            agent(client, client.task()["task"])
+            trace = agent(client, client.task()["task"])
         except Exception:
             err = traceback.format_exc(limit=3)
         case = client.admin("case")
@@ -121,7 +124,7 @@ if __name__ == "__main__":
         cands = [[x for x in c if valid_action(x, sids)] for c in raw if isinstance(c, list)]
         row = dict(case_id=spec["case_id"], proposer="llm", candidates=dedupe(cands), n_raw=len(raw),
                    n_invalid_actions=sum(len(c) for c in raw if isinstance(c, list)) - sum(len(c) for c in cands),
-                   tool_calls=len(case.get("observations", [])), report=rep, error=err)
+                   tool_calls=len(case.get("observations", [])), report=rep, trace=trace, error=err)
         with open(a.out, "a") as f:
             f.write(json.dumps(row) + "\n")
         print(spec["case_id"], len(row["candidates"]), "candidates", "err" if err else "", flush=True)

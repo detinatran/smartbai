@@ -21,6 +21,8 @@ SPLITS_V2 = [("dev", 6, 20000), ("calibration", 35, 60000), ("test", 35, 70000)]
 SPLITS_V4 = [("dev", 6, 20000), ("calibration", 35, 80000), ("test", 35, 90000)]
 # amendment 5 (v5): one gate per family needs more calibration cases per family; fresh seeds
 SPLITS_V5 = [("dev", 6, 20000), ("calibration", 100, 110000), ("test", 50, 120000)]
+# amendment 6 (v6): the frozen LLM proposer joins; fresh calibration and test seeds, same sizes as v5
+SPLITS_V6 = [("dev", 6, 20000), ("calibration", 100, 130000), ("test", 50, 140000)]
 PLANT_KEYS = ["mtbf_h", "mttr_min", "temp_k", "hall_coupling", "precursor_h", "degraded_defect_mult", "maint_min", "service_cv",
               "hvac_kw_per_deg", "cooling_high_coupling"]
 FACTOR = 1.5
@@ -73,9 +75,9 @@ if __name__ == "__main__":
     ap.add_argument("climate")
     ap.add_argument("out")
     ap.add_argument("--workers", type=int, default=8)
-    ap.add_argument("--version", choices=["v1", "v2", "v4", "v5"], default="v5")
+    ap.add_argument("--version", choices=["v1", "v2", "v4", "v5", "v6"], default="v6")
     a = ap.parse_args()
-    splits = dict(v1=SPLITS, v2=SPLITS_V2, v4=SPLITS_V4, v5=SPLITS_V5)[a.version]
+    splits = dict(v1=SPLITS, v2=SPLITS_V2, v4=SPLITS_V4, v5=SPLITS_V5, v6=SPLITS_V6)[a.version]
     jobs = []
     for split, n, base in splits:
         for f_i, fam in enumerate(FAMILIES):

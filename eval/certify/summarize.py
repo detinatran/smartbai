@@ -186,6 +186,10 @@ def main():
         pv["H4"] = wilcoxon(d, zero_method="wilcox", alternative="greater").pvalue if (d != 0).any() else 1.0
     adj = holm(pv)
     print(f"H3 certify mean G {G.mean():.1f}")
+    if main_p == "llm" and "rule-certify" in cond:  # amendment 6, secondary: LLM against rule proposals, two-sided
+        d = G - np.array([x["G"] for x in cond["rule-certify"]])
+        p_lr = wilcoxon(d, zero_method="wilcox", alternative="two-sided").pvalue if (d != 0).any() else 1.0
+        print(f"secondary: LLM-Certify minus Rule-Certify, mean {d.mean():.1f}, Wilcoxon two-sided p = {p_lr:.4g} (not in the Holm family)")
     for k in pv:
         print(f"{k}: p = {pv[k]:.4g}, Holm-adjusted = {adj[k]:.4g} -> {'supported' if adj[k] < 0.05 else 'not supported'}")
     print("\n== risk-coverage on the test cases (secondary)")

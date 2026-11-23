@@ -384,3 +384,37 @@ simultaneous per-family gate; the per-family table adds the naive conditions.
 
 v5 is run once, calibration then test. The v5 result is reported whatever it is, alongside v1, v2 and v4.
 `summarize.py --gate pooled` with the matching `--ltt` reproduces the v1, v2 and v4 summaries.
+
+## Amendment 6 (2026-11-23, while v5 runs, before any v6 calibration or test case is generated or run)
+Motivation: amendments 3–5 ran Rule-Certify in place of LLM-Certify because no LLM proposer was available. The LLM
+proposer is now fixed (`eval/certify/FROZEN.md`): Qwen3.5-9B, Q4_K_M, served locally by llama.cpp, with read tools only.
+Three prompts were tried on the dev split only; the dev numbers and the choice are in `FROZEN.md`. The v5 run continues
+unchanged and is reported as planned.
+
+Changes:
+1. **LLM proposer** as frozen in `FROZEN.md` (`llm_agent.py`). Its proposals are collected once per split and stored;
+   `run.py --llm-proposals` evaluates them with the same twin, elimination, plant and harm label as the other
+   proposers. A case where the LLM submits no valid candidate abstains for every LLM condition and stays in the
+   denominators.
+2. **Fresh splits** (`eval/scenarios_certify.py --version v6`): calibration 100 cases per family (600, seeds 130000+),
+   test 50 per family (300, seeds 140000+), same generator. The dev split is unchanged.
+3. **Hypotheses** (test split, per-family gate of amendment 5; LLM-Certify-F is the per-family gate on LLM proposals):
+   - **H1, validity per family (falsification check)** for LLM-Certify-F: as in amendment 5 (exact one-sided binomial
+     per family with executed cases, Holm over families at 0.05).
+   - **H2, a pooled gate is not enough** for the LLM proposer: as H2 of amendment 5 (pooled gate fitted on the whole v6
+     calibration split; Bonferroni over families).
+   - **H3, the gate keeps value.** G of LLM-Certify-F is greater than 0 (Wilcoxon signed-rank, one-sided,
+     zero_method = "wilcox").
+   - **H4, proposals matter.** G of LLM-Certify-F is greater than G of Random5-Certify-F, paired by case (Wilcoxon
+     signed-rank, one-sided, zero_method = "wilcox").
+   - H2, H3 and H4 form one Holm family at 0.05. H1 is tested on its own.
+4. **Secondary** (not in the Holm family): LLM-Certify-F against Rule-Certify-F, paired, Wilcoxon two-sided; H1 and H3
+   for Rule-Certify-F and Random5-Certify-F; LLM proposal failures (cases without a decision, invalid actions, server
+   errors), turns and tokens per case; all secondary outputs of amendment 5.
+
+Unchanged: everything listed as unchanged in amendment 5, and the per-family gate itself.
+
+Order of work: this amendment, `FROZEN.md` and the code are committed first. Then the v6 cases are generated, the LLM
+proposals for the calibration and test splits are collected, and `run.py` evaluates calibration then test with all
+three proposers. Gate thresholds use the calibration split only. v6 is run once and reported whatever it is,
+alongside v1–v5. `summarize.py` (default `--gate family`) on the v6 files gives the result.
