@@ -1,0 +1,6 @@
+case_id,finished,turns,valid_json_turns,tool_errors,token_cap_turns,candidate_lists,claims,unsupported_claims,value_mismatches,model_latency_seconds
+dev_degradation_0,True,2,2,0,0,2,2,0,0,37.121724
+dev_degradation_1,True,8,8,0,0,1,7,0,0,158.623274
+dev_degradation_2,True,3,3,0,0,1,2,0,0,46.127001
+dev_degradation_3,True,2,2,0,0,1,3,0,0,34.124052
+dev_degradation_4,True,3,3,0,0,1,2,0,0,44.787175
