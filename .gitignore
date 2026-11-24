@@ -12,3 +12,14 @@ results/
 bosch/
 *twin_v2_config.json
 structure/
+# Local input reconstruction artifacts and pinned source snapshots
+/experiments/input_rebuild/artifacts/
+/experiments/input_rebuild/upstream/
+/experiments/input_rebuild/checks/
+/.local_archive/
+/experiments/input_rebuild/
+# Only curated smoke summaries are reviewable; raw results remain local.
+!/experiments/agent_smoke/results/
+/experiments/agent_smoke/results/*
+!/experiments/agent_smoke/results/dev_degradation_5.csv
+!/experiments/agent_smoke/results/dev_degradation_5_provenance.json
